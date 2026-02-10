@@ -538,8 +538,33 @@ function determineAutoMode(games){if(games.some(g=>g.status==='live'))return'liv
 
 function simulateScoreUpdate(){MOCK_GAMES.forEach(g=>{if(g.status==='live'){if(Math.random()>0.5){const side=Math.random()>0.5?'home':'away';g[side].score+=Math.random()>0.7?3:2;}let[m,s]=g.clock.split(':').map(Number);s-=Math.floor(Math.random()*20)+5;if(s<0){m--;s+=60;}if(m<0)m=11;g.clock=`${m}:${s.toString().padStart(2,'0')}`;}});if(currentMode==='live'){const pool=MOCK_GAMES.filter(g=>g.status==='live');if(pool.length>0){const idx=currentGameIndex%pool.length;renderGameScreens(pool[idx]);renderMiniScores(MOCK_GAMES,pool[idx].id);}}}
 
+// ═══ LIVE API POLLING ═══
+let liveFeed=null;    // null = not yet loaded from API
+let liveHeadlines=null;
+
+function pollBluesky(){
+  fetch('/api/bluesky').then(r=>r.json()).then(data=>{
+    if(data.posts&&data.posts.length>0){
+      liveFeed=data.posts;
+      renderFeed(liveFeed);
+      console.log('[API] Bluesky feed updated:',data.count,'posts');
+    }
+  }).catch(e=>console.warn('[API] Bluesky poll failed:',e));
+}
+
+function pollHeadlines(){
+  fetch('/api/headlines').then(r=>r.json()).then(data=>{
+    if(data.headlines&&data.headlines.length>0){
+      liveHeadlines=data.headlines;
+      renderTicker(liveHeadlines);
+      console.log('[API] Headlines updated:',data.count,'items');
+    }
+  }).catch(e=>console.warn('[API] Headlines poll failed:',e));
+}
+
 function init(){
   renderGameScreens(MOCK_GAMES[0]);renderMiniScores(MOCK_GAMES,MOCK_GAMES[0].id);
+  // Show mock data immediately as fallback
   renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);
   setMode(determineAutoMode(MOCK_GAMES));
   setInterval(rotateScreen,CONFIG.screenRotateInterval);
@@ -548,6 +573,10 @@ function init(){
   setInterval(simulateScoreUpdate,5000);
   setInterval(()=>setMode(determineAutoMode(MOCK_GAMES)),60000);
   document.addEventListener('keydown',e=>{if(e.key==='1')setMode('live');if(e.key==='2')setMode('rankings');});
+  // Start live API polling — fetch immediately, then on interval
+  pollBluesky();pollHeadlines();
+  setInterval(pollBluesky,120000);   // every 2 minutes
+  setInterval(pollHeadlines,180000); // every 3 minutes
 }
 init();
 </script>

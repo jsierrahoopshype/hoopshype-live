@@ -543,21 +543,35 @@ let liveFeed=null;    // null = not yet loaded from API
 let liveHeadlines=null;
 
 function pollBluesky(){
-  fetch('/api/bluesky').then(r=>r.json()).then(data=>{
+  console.log('[API] Polling /api/bluesky...');
+  fetch('/api/bluesky').then(r=>{
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }).then(data=>{
+    console.log('[API] Bluesky response:',data.count,'posts, first:',data.posts[0]?.author||'(none)');
     if(data.posts&&data.posts.length>0){
       liveFeed=data.posts;
       renderFeed(liveFeed);
-      console.log('[API] Bluesky feed updated:',data.count,'posts');
+      console.log('[API] Bluesky feed rendered with',liveFeed.length,'real posts');
+    }else{
+      console.log('[API] Bluesky returned empty — keeping current feed');
     }
   }).catch(e=>console.warn('[API] Bluesky poll failed:',e));
 }
 
 function pollHeadlines(){
-  fetch('/api/headlines').then(r=>r.json()).then(data=>{
+  console.log('[API] Polling /api/headlines...');
+  fetch('/api/headlines').then(r=>{
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }).then(data=>{
+    console.log('[API] Headlines response:',data.count,'items, first:',data.headlines[0]?.text?.slice(0,50)||'(none)');
     if(data.headlines&&data.headlines.length>0){
       liveHeadlines=data.headlines;
       renderTicker(liveHeadlines);
-      console.log('[API] Headlines updated:',data.count,'items');
+      console.log('[API] Ticker rendered with',liveHeadlines.length,'real headlines');
+    }else{
+      console.log('[API] Headlines returned empty — keeping current ticker');
     }
   }).catch(e=>console.warn('[API] Headlines poll failed:',e));
 }

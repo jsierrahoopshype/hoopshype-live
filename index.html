@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1920">
+<title>HoopsHype TV — Live Broadcast</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --canvas-w:1920px;--canvas-h:1080px;
+  --bg-base:#0A0E14;--bg-panel:#111820;--bg-panel-alt:#161E28;--bg-surface:#1A2332;
+  --bg-row-odd:rgba(255,255,255,0.025);--border-subtle:rgba(255,255,255,0.06);
+  --border-medium:rgba(255,255,255,0.10);--border-accent:rgba(255,140,0,0.3);
+  --text-primary:#F0F2F5;--text-secondary:#8B95A5;--text-tertiary:#5A6577;--text-muted:#3D4756;
+  --accent:#FF8C00;--accent-bright:#FFa726;--accent-glow:rgba(255,140,0,0.15);
+  --live-red:#EF4444;--live-glow:rgba(239,68,68,0.3);--win-green:#22C55E;--new-badge:#3B82F6;
+  --font-display:'Outfit',sans-serif;--font-body:'DM Sans',sans-serif;--font-mono:'DM Mono',monospace;
+  --sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:20px;--sp-6:24px;--sp-8:32px;--sp-10:40px;
+  --radius-sm:6px;--radius-md:10px;--radius-lg:14px;
+  --topbar-h:48px;--ticker-h:48px;--sidebar-w:380px;--safe-margin:20px;
+}
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;background:var(--bg-base);color:var(--text-primary);font-family:var(--font-body);font-size:15px;line-height:1.4;-webkit-font-smoothing:antialiased}
+
+.broadcast-canvas{width:var(--canvas-w);height:var(--canvas-h);display:grid;grid-template-rows:var(--topbar-h) 1fr var(--ticker-h);grid-template-columns:1fr var(--sidebar-w);grid-template-areas:"topbar topbar" "main sidebar" "ticker ticker";padding:0 var(--safe-margin)}
+
+/* ═══ TOPBAR ═══ */
+.topbar{grid-area:topbar;display:flex;align-items:center;justify-content:space-between;padding:0 var(--sp-5);background:linear-gradient(180deg,rgba(10,14,20,0.95),rgba(10,14,20,0.80));border-bottom:1px solid var(--border-subtle);z-index:100}
+.topbar-left{display:flex;align-items:center;gap:var(--sp-4)}
+.logo-text{font-family:var(--font-display);font-weight:800;font-size:21px;letter-spacing:-0.5px}
+.logo-text span{color:var(--accent)}
+.live-badge{display:flex;align-items:center;gap:6px;padding:4px 12px 4px 10px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.25);border-radius:20px;font-family:var(--font-display);font-weight:700;font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--live-red)}
+.live-dot{width:8px;height:8px;background:var(--live-red);border-radius:50%;animation:livePulse 1.5s ease-in-out infinite}
+@keyframes livePulse{0%,100%{opacity:1;box-shadow:0 0 0 0 var(--live-glow)}50%{opacity:0.6;box-shadow:0 0 0 6px transparent}}
+.topbar-right{display:flex;align-items:center;gap:var(--sp-6)}
+.topbar-clock{font-family:var(--font-mono);font-size:14px;font-weight:500;color:var(--text-secondary)}
+.topbar-date{font-family:var(--font-body);font-size:13px;color:var(--text-tertiary)}
+.topbar-tz{font-family:var(--font-mono);font-size:10px;color:var(--text-muted);margin-left:-12px}
+
+/* ═══ MAIN AREA ═══ */
+.main-area{grid-area:main;padding:var(--sp-4) var(--sp-4) var(--sp-3) var(--sp-3);overflow:hidden;display:flex;flex-direction:column;gap:var(--sp-3)}
+.featured-game{flex:1;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-lg);position:relative;overflow:hidden}
+.featured-game::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent-bright),var(--accent));opacity:0.8;z-index:2}
+.featured-game.hidden{display:none}
+.game-screens{position:relative;width:100%;height:100%}
+.game-screen{position:absolute;inset:0;padding:var(--sp-4) var(--sp-5);display:flex;flex-direction:column;opacity:0;transform:translateX(30px);transition:opacity 0.45s ease,transform 0.45s ease;pointer-events:none}
+.game-screen.active{opacity:1;transform:translateX(0);pointer-events:auto}
+.game-screen.exit-left{opacity:0;transform:translateX(-30px)}
+.screen-dots{position:absolute;bottom:var(--sp-2);left:50%;transform:translateX(-50%);display:flex;gap:6px;z-index:5}
+.screen-dot{width:6px;height:6px;border-radius:50%;background:var(--text-muted);transition:background 0.3s,width 0.3s}
+.screen-dot.active{background:var(--accent);width:18px;border-radius:3px}
+
+/* ─── SCREEN 1: BIG SCOREBOARD ─── */
+.s1-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-2)}
+.s1-label{font-family:var(--font-display);font-weight:600;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent)}
+.s1-period-row{display:flex;align-items:center;gap:var(--sp-3)}
+.s1-period-badge{font-family:var(--font-display);font-weight:700;font-size:14px;padding:4px 14px;background:var(--bg-surface);border-radius:var(--radius-sm);color:var(--text-primary)}
+.s1-clock{font-family:var(--font-mono);font-weight:600;font-size:18px;color:var(--live-red)}
+.s1-venue{font-family:var(--font-body);font-size:11px;color:var(--text-muted)}
+
+/* Big scoreboard block */
+.s1-scoreboard{display:flex;align-items:stretch;gap:0;flex:0 0 auto;background:var(--bg-surface);border-radius:var(--radius-md);overflow:hidden;margin-bottom:var(--sp-3)}
+.s1-team-side{flex:1;display:flex;align-items:center;padding:var(--sp-4) var(--sp-5);gap:var(--sp-4)}
+.s1-team-side.home{justify-content:flex-end;text-align:right}
+.s1-team-logo{width:72px;height:72px;background:var(--bg-panel);border:2px solid var(--border-medium);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:800;font-size:22px;color:var(--text-secondary);flex-shrink:0}
+.s1-team-info{display:flex;flex-direction:column;gap:2px}
+.s1-team-city{font-family:var(--font-display);font-weight:500;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-tertiary)}
+.s1-team-name{font-family:var(--font-display);font-weight:800;font-size:26px;letter-spacing:-0.5px;line-height:1.1}
+.s1-team-record{font-family:var(--font-mono);font-size:12px;color:var(--text-tertiary)}
+.s1-score-center{flex:0 0 320px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg-panel);position:relative}
+.s1-scores-row{display:flex;align-items:baseline;gap:var(--sp-6)}
+.s1-big-score{font-family:var(--font-display);font-weight:900;font-size:80px;letter-spacing:-3px;line-height:1;text-shadow:0 2px 24px rgba(0,0,0,0.6)}
+.s1-big-score.leading{color:var(--accent-bright)}
+.s1-score-sep{font-family:var(--font-display);font-weight:200;font-size:50px;color:var(--text-muted)}
+
+/* Quarter scores */
+.s1-quarters{display:flex;gap:0;margin-top:var(--sp-2);width:100%}
+.s1-q-col{display:flex;flex-direction:column;align-items:center;flex:1}
+.s1-q-header{font-family:var(--font-display);font-weight:600;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);padding:2px 0;border-bottom:1px solid var(--border-subtle);width:100%;text-align:center}
+.s1-q-val{font-family:var(--font-mono);font-weight:500;font-size:13px;padding:3px 0;color:var(--text-secondary);width:100%;text-align:center}
+.s1-q-val.current{color:var(--accent-bright);font-weight:700}
+.s1-q-val:first-of-type{border-bottom:1px solid rgba(255,255,255,0.03)}
+
+/* Stats + Leaders below scoreboard */
+.s1-bottom{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-4);flex:1;min-height:0}
+.s1-stats-panel{background:var(--bg-surface);border-radius:var(--radius-md);padding:var(--sp-4);display:flex;flex-direction:column}
+.s1-panel-title{font-family:var(--font-display);font-weight:700;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);margin-bottom:var(--sp-3)}
+.stat-compare-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:3px 0}
+.stat-compare-row+.stat-compare-row{border-top:1px solid rgba(255,255,255,0.03)}
+.scv-left,.scv-right{font-family:var(--font-mono);font-weight:500;font-size:14px;color:var(--text-secondary)}
+.scv-left{text-align:right;padding-right:var(--sp-3)}
+.scv-right{text-align:left;padding-left:var(--sp-3)}
+.scv-left.better,.scv-right.better{color:var(--accent-bright);font-weight:700}
+.scv-label{font-family:var(--font-display);font-weight:600;font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text-tertiary);text-align:center;min-width:48px}
+.leader-row{display:flex;justify-content:space-between;align-items:center;padding:3px var(--sp-2);border-radius:var(--radius-sm)}
+.leader-row+.leader-row{border-top:1px solid rgba(255,255,255,0.03)}
+.leader-stat-type{font-family:var(--font-display);font-weight:700;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--accent);width:32px}
+.leader-player{font-family:var(--font-body);font-size:13px;color:var(--text-secondary);flex:1;margin-left:var(--sp-2)}
+.leader-value{font-family:var(--font-mono);font-weight:600;font-size:14px;color:var(--text-primary)}
+.leaders-team-name{font-family:var(--font-display);font-weight:600;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:var(--sp-1);margin-top:var(--sp-2)}
+.leaders-team-name:first-child{margin-top:0}
+
+/* ─── SCREENS 2 & 3: BOXSCORE W/ SCOREBOARD ─── */
+.bs-scoreboard{display:flex;align-items:stretch;background:var(--bg-surface);border-radius:var(--radius-md);overflow:hidden;margin-bottom:var(--sp-3);flex-shrink:0}
+.bs-team-side{flex:1;display:flex;align-items:center;padding:var(--sp-3) var(--sp-4);gap:var(--sp-3)}
+.bs-team-side.home{justify-content:flex-end;text-align:right}
+.bs-team-logo{width:52px;height:52px;background:var(--bg-panel);border:2px solid var(--border-medium);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:800;font-size:16px;color:var(--text-secondary);flex-shrink:0}
+.bs-team-name{font-family:var(--font-display);font-weight:800;font-size:20px;letter-spacing:-0.3px}
+.bs-team-record{font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)}
+.bs-score-center{flex:0 0 280px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg-panel)}
+.bs-scores-row{display:flex;align-items:baseline;gap:var(--sp-5)}
+.bs-big-score{font-family:var(--font-display);font-weight:900;font-size:52px;letter-spacing:-2px;line-height:1;text-shadow:0 2px 16px rgba(0,0,0,0.5)}
+.bs-big-score.leading{color:var(--accent-bright)}
+.bs-score-sep{font-family:var(--font-display);font-weight:200;font-size:32px;color:var(--text-muted)}
+.bs-quarters{display:flex;gap:0;margin-top:var(--sp-1);width:100%}
+.bs-q-col{display:flex;flex-direction:column;align-items:center;flex:1}
+.bs-q-header{font-family:var(--font-display);font-weight:600;font-size:8px;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);padding:1px 0;border-bottom:1px solid var(--border-subtle);width:100%;text-align:center}
+.bs-q-val{font-family:var(--font-mono);font-weight:500;font-size:12px;padding:2px 0;color:var(--text-secondary);width:100%;text-align:center}
+.bs-q-val.current{color:var(--accent-bright);font-weight:700}
+.bs-q-val:first-of-type{border-bottom:1px solid rgba(255,255,255,0.03)}
+.bs-period-clock{font-family:var(--font-mono);font-size:11px;color:var(--live-red);margin-top:2px}
+
+/* Tab row for team selector */
+.bs-tabs{display:flex;margin-bottom:var(--sp-2);gap:0;background:var(--bg-surface);border-radius:var(--radius-sm);overflow:hidden}
+.bs-tab{flex:1;padding:var(--sp-2) var(--sp-4);font-family:var(--font-display);font-weight:700;font-size:12px;letter-spacing:0.5px;text-align:center;color:var(--text-tertiary);display:flex;align-items:center;justify-content:center;gap:var(--sp-2);border-bottom:2px solid transparent}
+.bs-tab.active{color:var(--text-primary);background:rgba(255,255,255,0.03);border-bottom-color:var(--accent)}
+.bs-tab-dot{width:6px;height:6px;border-radius:50%;background:var(--win-green)}
+
+/* Box score table */
+.bs-table-wrap{flex:1;overflow:hidden}
+.bs-table{width:100%;border-collapse:collapse;table-layout:fixed}
+.bs-table th{font-family:var(--font-display);font-weight:600;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-tertiary);text-align:center;padding:var(--sp-2);border-bottom:1px solid var(--border-medium);background:var(--bg-panel)}
+.bs-table th:first-child{text-align:left;width:160px}
+.bs-table td{font-family:var(--font-mono);font-size:12.5px;text-align:center;padding:4px var(--sp-2);color:var(--text-secondary);border-bottom:1px solid rgba(255,255,255,0.02)}
+.bs-table tbody tr:nth-child(odd){background:var(--bg-row-odd)}
+.bs-table td:first-child{text-align:left;font-family:var(--font-body);font-weight:500;color:var(--text-primary);font-size:13px}
+.bs-table td.highlight{color:var(--accent-bright);font-weight:700}
+.player-pos{font-family:var(--font-display);font-size:9px;font-weight:600;color:var(--text-muted);margin-left:5px}
+.player-num{font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-right:5px}
+.section-label{font-family:var(--font-display);font-weight:700;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);padding:var(--sp-2);border-bottom:1px solid var(--border-subtle)}
+.section-label td{font-family:var(--font-display);font-weight:700;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);text-align:left}
+.bs-table tfoot td{font-weight:700;color:var(--text-primary);border-top:1px solid var(--border-medium);background:rgba(255,140,0,0.04);font-size:13px}
+.bs-table tfoot .pct{font-size:10px;color:var(--accent);font-weight:600;display:block;margin-top:1px}
+
+/* Mini scores */
+.mini-scores{display:flex;gap:var(--sp-3);padding:var(--sp-2) 0;overflow:hidden;flex-shrink:0}
+.mini-scores.hidden{display:none}
+.mini-game{flex:0 0 auto;display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2) var(--sp-4);background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-md);min-width:190px;transition:border-color 0.2s}
+.mini-game.active{border-color:var(--accent);background:var(--bg-panel-alt)}
+.mini-teams{display:flex;flex-direction:column;gap:2px}
+.mini-team-row{display:flex;align-items:center;gap:var(--sp-2)}
+.mini-team-abbr{font-family:var(--font-display);font-weight:700;font-size:12px;width:36px;color:var(--text-secondary)}
+.mini-score{font-family:var(--font-mono);font-weight:500;font-size:14px;min-width:28px;text-align:right}
+.mini-score.leading{color:var(--accent-bright);font-weight:700}
+.mini-period{font-family:var(--font-mono);font-size:10px;color:var(--live-red);text-align:center;min-width:36px}
+.mini-period.final{color:var(--text-tertiary)}
+
+/* ═══ RANKINGS ═══ */
+.rankings-mode{flex:1;display:none;flex-direction:column;gap:var(--sp-3)}
+.rankings-mode.active{display:flex}
+.next-games-bar{background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:var(--sp-3) var(--sp-5);display:flex;align-items:center;gap:var(--sp-6);flex-shrink:0}
+.next-games-label{font-family:var(--font-display);font-weight:600;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);white-space:nowrap}
+.next-games-list{display:flex;gap:var(--sp-4);overflow-x:auto;flex:1}
+.next-game-item{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-1) var(--sp-3);background:var(--bg-surface);border-radius:var(--radius-sm);white-space:nowrap;font-size:13px}
+.next-game-teams{font-family:var(--font-display);font-weight:600}
+.next-game-time{font-family:var(--font-mono);font-size:12px;color:var(--text-tertiary)}
+.rankings-panel{flex:1;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-lg);padding:var(--sp-6);position:relative;overflow:hidden;animation:fadeSlideIn 0.5s ease-out}
+.rankings-panel::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),transparent);opacity:0.6}
+@keyframes fadeSlideIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.rankings-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-5)}
+.rankings-title{font-family:var(--font-display);font-weight:800;font-size:20px}
+.rankings-source{font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary)}
+.rankings-progress{display:flex;gap:4px}
+.rankings-progress-dot{width:6px;height:6px;border-radius:50%;background:var(--text-muted);transition:background 0.3s,width 0.3s}
+.rankings-progress-dot.active{background:var(--accent);width:18px;border-radius:3px}
+.rankings-table{width:100%;border-collapse:collapse}
+.rankings-table th{font-family:var(--font-display);font-weight:600;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-tertiary);text-align:left;padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--border-subtle)}
+.rankings-table th:first-child{width:40px;text-align:center}
+.rankings-table td{padding:var(--sp-2) var(--sp-3);font-size:14px;border-bottom:1px solid rgba(255,255,255,0.02)}
+.rankings-table tbody tr:nth-child(odd){background:var(--bg-row-odd)}
+.rank-num{font-family:var(--font-display);font-weight:800;font-size:16px;color:var(--accent);text-align:center;display:block}
+.rank-num.top-3{color:var(--accent-bright)}
+.rank-player{font-family:var(--font-display);font-weight:600}
+.rank-team{font-family:var(--font-body);font-size:12px;color:var(--text-tertiary);margin-left:var(--sp-2)}
+.rank-value{font-family:var(--font-mono);font-weight:500}
+
+/* ═══ SIDEBAR ═══ */
+.sidebar{grid-area:sidebar;display:flex;flex-direction:column;padding:var(--sp-4) var(--sp-3) var(--sp-3) 0;gap:var(--sp-3);overflow:hidden}
+.sidebar-header{display:flex;align-items:center;padding:0 var(--sp-3) var(--sp-2);gap:var(--sp-2)}
+.sidebar-title{font-family:var(--font-display);font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text-primary);display:flex;align-items:center;gap:var(--sp-2)}
+.bsky-logo{width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center}
+.bsky-logo svg{width:18px;height:18px}
+.feed-container{flex:1;overflow:hidden;display:flex;flex-direction:column;gap:var(--sp-3);mask-image:linear-gradient(to bottom,black 0%,black 90%,transparent 100%);-webkit-mask-image:linear-gradient(to bottom,black 0%,black 90%,transparent 100%)}
+.feed-post{background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:var(--sp-3) var(--sp-4);animation:postSlideIn 0.4s ease-out;flex-shrink:0}
+@keyframes postSlideIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}
+.post-header{display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-2)}
+.post-avatar{width:28px;height:28px;border-radius:50%;background:var(--bg-surface);border:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:700;font-size:10px;color:var(--accent);flex-shrink:0}
+.post-meta{flex:1;min-width:0}
+.post-author{font-family:var(--font-display);font-weight:600;font-size:13px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.post-handle{font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary)}
+.post-time{font-family:var(--font-mono);font-size:10px;color:var(--text-muted);flex-shrink:0}
+.post-text{font-family:var(--font-body);font-size:13.5px;line-height:1.45;color:var(--text-primary);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+
+/* ═══ TICKER ═══ */
+.ticker-area{grid-area:ticker;display:flex;align-items:center;background:var(--bg-panel);border-top:1px solid var(--border-subtle);overflow:hidden;position:relative}
+.ticker-area::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:0.4}
+.ticker-label{flex-shrink:0;padding:0 var(--sp-5);font-family:var(--font-display);font-weight:700;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--bg-base);background:var(--accent);height:100%;display:flex;align-items:center;position:relative;z-index:2}
+.ticker-label::after{content:'';position:absolute;right:-16px;top:0;bottom:0;width:16px;background:linear-gradient(to right,var(--accent),transparent);opacity:0.3}
+.ticker-track{flex:1;overflow:hidden;height:100%;display:flex;align-items:center}
+.ticker-content{display:flex;align-items:center;white-space:nowrap;animation:tickerScroll var(--ticker-duration,60s) linear infinite;padding-left:20px}
+@keyframes tickerScroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+.ticker-item{display:inline-flex;align-items:center;gap:var(--sp-2);padding:0 var(--sp-6)}
+.ticker-badge{font-family:var(--font-display);font-weight:700;font-size:9px;letter-spacing:1px;text-transform:uppercase;padding:2px 8px;border-radius:3px;flex-shrink:0;background:rgba(59,130,246,0.15);color:var(--new-badge);border:1px solid rgba(59,130,246,0.25)}
+.ticker-headline{font-family:var(--font-body);font-size:14px;font-weight:500;color:var(--text-primary)}
+.ticker-time{font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary)}
+.ticker-sep{color:var(--text-muted);font-size:6px;margin:0 var(--sp-1)}
+</style>
+</head>
+<body>
+<div class="broadcast-canvas">
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="logo-text">HOOPS<span>HYPE</span> TV</div>
+      <div class="live-badge" id="liveBadge"><div class="live-dot"></div>LIVE</div>
+    </div>
+    <div class="topbar-right">
+      <div class="topbar-date" id="dateDisplay"></div>
+      <div class="topbar-clock" id="clockDisplay"></div>
+      <div class="topbar-tz">ET</div>
+    </div>
+  </header>
+
+  <main class="main-area" id="mainArea">
+    <div class="featured-game" id="featuredGame">
+      <div class="game-screens" id="gameScreens">
+        <div class="game-screen active" id="screen1"></div>
+        <div class="game-screen" id="screen2"></div>
+        <div class="game-screen" id="screen3"></div>
+      </div>
+      <div class="screen-dots" id="screenDots"><div class="screen-dot active"></div><div class="screen-dot"></div><div class="screen-dot"></div></div>
+    </div>
+    <div class="mini-scores" id="miniScores"></div>
+    <div class="rankings-mode" id="rankingsMode">
+      <div class="next-games-bar"><div class="next-games-label">▶ NEXT GAMES</div><div class="next-games-list" id="nextGamesList"></div></div>
+      <div class="rankings-panel" id="rankingsPanel"></div>
+    </div>
+  </main>
+
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-title">
+        <span class="bsky-logo"><svg viewBox="0 0 600 530" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M135.72 44.03C202.22 93.55 273.42 195.06 300 249.71C326.58 195.06 397.78 93.55 464.28 44.03C512.34 8.46 590 -19.9 590 68.2C590 86.15 580.59 232.75 574.58 256.57C555.16 333.52 470.98 354.41 396.2 341.73C527.35 363.77 558.75 435.78 493.5 507.8C368.69 645.65 313.43 488.45 302.22 454.2C300.78 449.88 300.08 447.86 300 449.16C299.92 447.86 299.22 449.88 297.78 454.2C286.57 488.45 231.31 645.65 106.5 507.8C41.25 435.78 72.65 363.77 203.8 341.73C129.02 354.41 44.84 333.52 25.42 256.57C19.41 232.75 10 86.15 10 68.2C10 -19.9 87.66 8.46 135.72 44.03Z" fill="#0085ff"/></svg></span>
+        NBA BLUESKY BUZZ
+      </div>
+    </div>
+    <div class="feed-container" id="feedContainer"></div>
+  </aside>
+
+  <div class="ticker-area">
+    <div class="ticker-label">LATEST</div>
+    <div class="ticker-track"><div class="ticker-content" id="tickerContent"></div></div>
+  </div>
+</div>
+
+<script>
+const CONFIG={gameRotateInterval:20000,screenRotateInterval:8000,rankingsRotateInterval:15000,tickerSpeed:50,autoModeHoursAfterLastGame:6};
+
+const MOCK_GAMES=[
+  {id:'1',status:'live',period:'3RD QTR',periodNum:3,clock:'4:32',venue:'TD Garden, Boston',
+   quarters:{away:[28,31,null,null],home:[30,27,null,null]},
+   away:{abbr:'BOS',city:'BOSTON',name:'Celtics',record:'38-12',score:89,
+    leaders:{pts:{name:'J. Tatum',val:28},reb:{name:'K. Porzingis',val:9},ast:{name:'D. White',val:7}},
+    stats:{fgPct:'48.2',threePct:'38.5',ftPct:'82.1',reb:32,ast:22,stl:6,blk:4,to:10},
+    boxscore:{starters:[
+      {num:'0',name:'J. Tatum',pos:'SF',min:'28',pts:28,reb:6,ast:4,stl:1,blk:0,fg:'10-19',three:'4-8',ft:'4-5',pm:'+7',to:3},
+      {num:'7',name:'J. Brown',pos:'SG',min:'26',pts:18,reb:3,ast:3,stl:2,blk:0,fg:'7-14',three:'2-5',ft:'2-2',pm:'+5',to:2},
+      {num:'8',name:'K. Porzingis',pos:'C',min:'24',pts:16,reb:9,ast:1,stl:0,blk:3,fg:'6-12',three:'2-4',ft:'2-3',pm:'+8',to:1},
+      {num:'9',name:'D. White',pos:'PG',min:'27',pts:12,reb:3,ast:7,stl:2,blk:1,fg:'5-10',three:'2-5',ft:'0-0',pm:'+3',to:2},
+      {num:'42',name:'A. Horford',pos:'PF',min:'20',pts:8,reb:5,ast:3,stl:0,blk:0,fg:'3-7',three:'1-3',ft:'1-2',pm:'+2',to:1}],
+     bench:[
+      {num:'11',name:'P. Pritchard',pos:'G',min:'14',pts:5,reb:1,ast:2,stl:1,blk:0,fg:'2-5',three:'1-3',ft:'0-0',pm:'-1',to:0},
+      {num:'77',name:'S. Hauser',pos:'F',min:'10',pts:2,reb:2,ast:1,stl:0,blk:0,fg:'1-3',three:'0-2',ft:'0-0',pm:'-3',to:1}]}},
+   home:{abbr:'LAL',city:'LOS ANGELES',name:'Lakers',record:'30-20',score:84,
+    leaders:{pts:{name:'L. James',val:24},reb:{name:'A. Davis',val:11},ast:{name:'A. Reaves',val:6}},
+    stats:{fgPct:'45.1',threePct:'33.3',ftPct:'78.6',reb:30,ast:19,stl:5,blk:3,to:12},
+    boxscore:{starters:[
+      {num:'23',name:'L. James',pos:'SF',min:'30',pts:24,reb:7,ast:5,stl:1,blk:1,fg:'9-18',three:'3-7',ft:'3-4',pm:'-3',to:3},
+      {num:'3',name:'A. Davis',pos:'PF',min:'29',pts:20,reb:11,ast:2,stl:1,blk:2,fg:'8-16',three:'0-1',ft:'4-6',pm:'-2',to:2},
+      {num:'15',name:'A. Reaves',pos:'SG',min:'27',pts:16,reb:3,ast:6,stl:2,blk:0,fg:'6-13',three:'2-5',ft:'2-2',pm:'-5',to:1},
+      {num:'1',name:'D. Russell',pos:'PG',min:'24',pts:11,reb:2,ast:4,stl:1,blk:0,fg:'4-11',three:'2-6',ft:'1-1',pm:'-7',to:3},
+      {num:'28',name:'R. Hachimura',pos:'PF',min:'22',pts:8,reb:4,ast:1,stl:0,blk:0,fg:'3-8',three:'1-3',ft:'1-2',pm:'-1',to:2}],
+     bench:[
+      {num:'2',name:'J. Vanderbilt',pos:'F',min:'12',pts:3,reb:2,ast:0,stl:0,blk:0,fg:'1-3',three:'0-0',ft:'1-2',pm:'+2',to:1}]}}},
+  {id:'2',status:'live',period:'2ND QTR',periodNum:2,clock:'8:15',venue:'Footprint Center, Phoenix',
+   quarters:{away:[28,null,null,null],home:[30,null,null,null]},
+   away:{abbr:'MIL',city:'MILWAUKEE',name:'Bucks',record:'32-18',score:48,
+    leaders:{pts:{name:'G. Antetokounmpo',val:18},reb:{name:'G. Antetokounmpo',val:7},ast:{name:'D. Lillard',val:5}},
+    stats:{fgPct:'46.8',threePct:'35.0',ftPct:'80.0',reb:18,ast:12,stl:3,blk:2,to:6},
+    boxscore:{starters:[
+      {num:'34',name:'G. Antetokounmpo',pos:'PF',min:'18',pts:18,reb:7,ast:3,stl:1,blk:1,fg:'7-12',three:'0-1',ft:'4-6',pm:'-2',to:2},
+      {num:'0',name:'D. Lillard',pos:'PG',min:'18',pts:14,reb:1,ast:5,stl:1,blk:0,fg:'5-10',three:'3-6',ft:'1-1',pm:'-3',to:1},
+      {num:'22',name:'K. Middleton',pos:'SF',min:'16',pts:8,reb:3,ast:2,stl:0,blk:0,fg:'3-7',three:'1-3',ft:'1-2',pm:'-1',to:1},
+      {num:'5',name:'B. Portis',pos:'C',min:'14',pts:6,reb:4,ast:1,stl:0,blk:1,fg:'2-5',three:'1-2',ft:'1-1',pm:'0',to:1},
+      {num:'11',name:'B. Lopez',pos:'C',min:'14',pts:2,reb:2,ast:1,stl:1,blk:0,fg:'1-4',three:'0-2',ft:'0-0',pm:'-2',to:1}],
+     bench:[]}},
+   home:{abbr:'PHX',city:'PHOENIX',name:'Suns',record:'29-21',score:52,
+    leaders:{pts:{name:'K. Durant',val:20},reb:{name:'J. Nurkic',val:6},ast:{name:'D. Booker',val:4}},
+    stats:{fgPct:'50.0',threePct:'40.0',ftPct:'85.7',reb:20,ast:14,stl:4,blk:1,to:5},
+    boxscore:{starters:[
+      {num:'35',name:'K. Durant',pos:'SF',min:'18',pts:20,reb:4,ast:3,stl:1,blk:1,fg:'8-14',three:'2-4',ft:'2-2',pm:'+4',to:1},
+      {num:'1',name:'D. Booker',pos:'SG',min:'17',pts:14,reb:2,ast:4,stl:1,blk:0,fg:'5-10',three:'2-4',ft:'2-2',pm:'+3',to:2},
+      {num:'27',name:'J. Nurkic',pos:'C',min:'15',pts:8,reb:6,ast:2,stl:0,blk:0,fg:'3-6',three:'0-0',ft:'2-3',pm:'+2',to:1},
+      {num:'3',name:'B. Beal',pos:'SF',min:'14',pts:6,reb:3,ast:3,stl:1,blk:0,fg:'2-7',three:'1-3',ft:'1-1',pm:'+1',to:0},
+      {num:'12',name:'G. Allen',pos:'PF',min:'12',pts:4,reb:3,ast:1,stl:1,blk:0,fg:'2-4',three:'0-1',ft:'0-0',pm:'+1',to:1}],
+     bench:[]}}},
+  {id:'3',status:'final',period:'FINAL',periodNum:4,clock:'',venue:'Chase Center, San Francisco',
+   quarters:{away:[25,30,28,29],home:[28,27,26,24]},
+   away:{abbr:'DEN',city:'DENVER',name:'Nuggets',record:'35-15',score:112,
+    leaders:{pts:{name:'N. Jokic',val:32},reb:{name:'N. Jokic',val:14},ast:{name:'N. Jokic',val:9}},
+    stats:{fgPct:'52.3',threePct:'41.2',ftPct:'88.0',reb:42,ast:28,stl:7,blk:3,to:9},
+    boxscore:{starters:[
+      {num:'15',name:'N. Jokic',pos:'C',min:'36',pts:32,reb:14,ast:9,stl:2,blk:1,fg:'12-18',three:'2-3',ft:'6-7',pm:'+12',to:3},
+      {num:'27',name:'J. Murray',pos:'PG',min:'34',pts:22,reb:3,ast:8,stl:1,blk:0,fg:'9-17',three:'3-6',ft:'1-1',pm:'+8',to:2},
+      {num:'1',name:'M. Porter Jr.',pos:'SF',min:'32',pts:18,reb:7,ast:2,stl:0,blk:0,fg:'7-13',three:'3-5',ft:'1-2',pm:'+6',to:1},
+      {num:'50',name:'A. Gordon',pos:'PF',min:'30',pts:14,reb:6,ast:3,stl:2,blk:1,fg:'6-10',three:'1-2',ft:'1-2',pm:'+5',to:1},
+      {num:'5',name:'K. Caldwell-Pope',pos:'SG',min:'28',pts:12,reb:2,ast:2,stl:1,blk:0,fg:'4-8',three:'3-5',ft:'1-1',pm:'+4',to:1}],
+     bench:[{num:'14',name:'C. Braun',pos:'G',min:'14',pts:6,reb:3,ast:2,stl:1,blk:1,fg:'2-5',three:'1-3',ft:'1-1',pm:'+1',to:0},
+      {num:'0',name:'P. Watson',pos:'F',min:'10',pts:4,reb:4,ast:1,stl:0,blk:0,fg:'2-4',three:'0-1',ft:'0-0',pm:'-2',to:1}]}},
+   home:{abbr:'GSW',city:'GOLDEN STATE',name:'Warriors',record:'28-22',score:105,
+    leaders:{pts:{name:'S. Curry',val:29},reb:{name:'D. Green',val:8},ast:{name:'S. Curry',val:7}},
+    stats:{fgPct:'47.8',threePct:'39.5',ftPct:'84.2',reb:38,ast:25,stl:5,blk:4,to:11},
+    boxscore:{starters:[
+      {num:'30',name:'S. Curry',pos:'PG',min:'36',pts:29,reb:4,ast:7,stl:1,blk:0,fg:'10-20',three:'5-11',ft:'4-4',pm:'-5',to:3},
+      {num:'11',name:'K. Thompson',pos:'SG',min:'32',pts:22,reb:3,ast:2,stl:0,blk:0,fg:'8-16',three:'4-9',ft:'2-2',pm:'-3',to:2},
+      {num:'22',name:'A. Wiggins',pos:'SF',min:'30',pts:18,reb:5,ast:2,stl:1,blk:1,fg:'7-14',three:'2-4',ft:'2-3',pm:'-4',to:2},
+      {num:'23',name:'D. Green',pos:'PF',min:'32',pts:8,reb:8,ast:6,stl:2,blk:2,fg:'3-7',three:'1-3',ft:'1-2',pm:'-2',to:2},
+      {num:'5',name:'K. Looney',pos:'C',min:'24',pts:6,reb:7,ast:2,stl:0,blk:1,fg:'3-5',three:'0-0',ft:'0-0',pm:'-6',to:1}],
+     bench:[{num:'3',name:'J. Poole',pos:'G',min:'18',pts:12,reb:1,ast:3,stl:1,blk:0,fg:'4-9',three:'2-5',ft:'2-2',pm:'+2',to:1}]}}}
+];
+
+const MOCK_NEXT_GAMES=[{away:'OKC',home:'MIN',time:'Tomorrow 8:00 PM ET'},{away:'CLE',home:'BOS',time:'Tomorrow 7:30 PM ET'},{away:'DAL',home:'LAC',time:'Tomorrow 10:00 PM ET'},{away:'SAC',home:'HOU',time:'Wed 8:30 PM ET'}];
+
+const MOCK_RANKINGS=[
+  {title:'Trade Value Rankings 2025',source:'HoopsHype',columns:['Rank','Player','Team','Trade Value'],data:[[1,'Luka Doncic','DAL','$210M'],[2,'Shai Gilgeous-Alexander','OKC','$205M'],[3,'Jayson Tatum','BOS','$198M'],[4,'Nikola Jokic','DEN','$195M'],[5,'Anthony Edwards','MIN','$190M'],[6,'Giannis Antetokounmpo','MIL','$185M'],[7,'Victor Wembanyama','SAS','$180M'],[8,'Tyrese Haliburton','IND','$165M'],[9,'Ja Morant','MEM','$158M'],[10,'LaMelo Ball','CHA','$150M']]},
+  {title:'NBA Salary Rankings 2024-25',source:'HoopsHype',columns:['Rank','Player','Team','Salary'],data:[[1,'Stephen Curry','GSW','$55.8M'],[2,'Nikola Jokic','DEN','$51.4M'],[3,'Joel Embiid','PHI','$51.4M'],[4,'Kevin Durant','PHX','$51.2M'],[5,'Bradley Beal','PHX','$50.2M'],[6,'LeBron James','LAL','$48.7M'],[7,'Giannis Antetokounmpo','MIL','$48.8M'],[8,'Paul George','PHI','$49.2M'],[9,'Kawhi Leonard','LAC','$49.3M'],[10,'Jaylen Brown','BOS','$49.5M']]},
+  {title:'Points Per Game Leaders',source:'HoopsHype',columns:['Rank','Player','Team','PPG'],data:[[1,'Luka Doncic','DAL','34.2'],[2,'Shai Gilgeous-Alexander','OKC','31.8'],[3,'Giannis Antetokounmpo','MIL','31.4'],[4,'Joel Embiid','PHI','30.1'],[5,'Kevin Durant','PHX','28.5'],[6,'Jayson Tatum','BOS','27.9'],[7,'Anthony Edwards','MIN','27.2'],[8,"De'Aaron Fox",'SAC','26.8'],[9,'Donovan Mitchell','CLE','26.3'],[10,'LeBron James','LAL','25.8']]}
+];
+
+const MOCK_HEADLINES=[
+  {text:'Lakers exploring trade options for additional wing depth ahead of deadline',isNew:true,time:'12m'},
+  {text:'Celtics\' Jayson Tatum expected to return from knee soreness by Friday',isNew:true,time:'28m'},
+  {text:'Warriors reportedly interested in veteran center to bolster frontcourt',isNew:true,time:'45m'},
+  {text:'Knicks and Heat discussed potential Sixth Man swap last week, per sources',isNew:false,time:'1h'},
+  {text:'Thunder GM Sam Presti: "We like where our roster is right now"',isNew:false,time:'2h'},
+  {text:'Pelicans open to moving expiring contracts for future assets',isNew:false,time:'2h'},
+  {text:'Nikola Jokic posts 4th triple-double in five games as Nuggets roll',isNew:false,time:'3h'},
+  {text:'Bucks exploring wing upgrades as trade deadline approaches',isNew:false,time:'3h'},
+  {text:'Spurs\' Wembanyama named Western Conference Player of the Week',isNew:false,time:'4h'},
+  {text:'Mavericks could be in the market for a backup point guard, sources say',isNew:false,time:'5h'},
+];
+
+const MOCK_FEED=[
+  {author:'Adrian Wojnarowski',handle:'@wojespn.bsky',avatar:'AW',time:'5m',text:'The Lakers and Pacers have engaged in preliminary discussions centered around a wing rotation player, league sources tell me.'},
+  {author:'Shams Charania',handle:'@shamscharania.bsky',avatar:'SC',time:'18m',text:'Sources: The Celtics are finalizing a deal to bring in additional frontcourt depth before the trade deadline.'},
+  {author:'Chris Haynes',handle:'@chaynes.bsky',avatar:'CH',time:'32m',text:'Nuggets star Nikola Jokic told reporters after tonight\'s win: "We\'re playing our best basketball right now."'},
+  {author:'Marc Stein',handle:'@marcstein.bsky',avatar:'MS',time:'45m',text:'League sources say the Thunder have emerged as dark-horse contenders for the No. 1 seed in the West.'},
+  {author:'Jake Fischer',handle:'@jakelfischer.bsky',avatar:'JF',time:'1h',text:'Multiple teams have called the Raptors about Pascal Siakam\'s availability. Toronto seeking young talent and picks.'},
+  {author:'Brian Windhorst',handle:'@bwindhorst.bsky',avatar:'BW',time:'1h',text:'The trade deadline is shaping up to be one of the busiest in recent memory. Tracking at least 8 active negotiations.'},
+  {author:'Kevin O\'Connor',handle:'@kevinoconnor.bsky',avatar:'KO',time:'2h',text:'Film thread: Why Wembanyama\'s defensive impact goes way beyond his block numbers. His contest rate is historically elite.'},
+];
+
+// ═══ CLOCK (ET) ═══
+function updateClock(){
+  const now=new Date();
+  const et=new Date(now.toLocaleString('en-US',{timeZone:'America/New_York'}));
+  document.getElementById('clockDisplay').textContent=et.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
+  document.getElementById('dateDisplay').textContent=et.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+}
+setInterval(updateClock,1000);updateClock();
+
+// ═══ QUARTER SCORES HTML ═══
+function renderQuarters(game,prefix){
+  const qs=['Q1','Q2','Q3','Q4'];
+  const totalLabel='T';
+  return `<div class="${prefix}-quarters">${qs.map((q,i)=>{
+    const aVal=game.quarters.away[i];
+    const hVal=game.quarters.home[i];
+    const isCurrent=i+1===game.periodNum&&game.status==='live';
+    return `<div class="${prefix}-q-col">
+      <div class="${prefix}-q-header">${q}</div>
+      <div class="${prefix}-q-val${isCurrent?' current':''}">${aVal!==null?aVal:'—'}</div>
+      <div class="${prefix}-q-val${isCurrent?' current':''}">${hVal!==null?hVal:'—'}</div>
+    </div>`;
+  }).join('')}<div class="${prefix}-q-col">
+    <div class="${prefix}-q-header">T</div>
+    <div class="${prefix}-q-val" style="font-weight:700;color:var(--text-primary)">${game.away.score}</div>
+    <div class="${prefix}-q-val" style="font-weight:700;color:var(--text-primary)">${game.home.score}</div>
+  </div></div>`;
+}
+
+// ═══ SCREEN 1: BIG SCOREBOARD ═══
+function renderScreen1(g){
+  const s=g.away.stats,h=g.home.stats;
+  const better=(a,b,lower)=>lower?parseFloat(a)<parseFloat(b):parseFloat(a)>parseFloat(b);
+  const stats=[['FG%',s.fgPct,h.fgPct],['3PT%',s.threePct,h.threePct],['FT%',s.ftPct,h.ftPct],['REB',s.reb,h.reb],['AST',s.ast,h.ast],['STL',s.stl,h.stl],['BLK',s.blk,h.blk],['TO',s.to,h.to]];
+  return `
+    <div class="s1-top">
+      <div><div class="s1-label">${g.status==='final'?'FINAL SCORE':'FEATURED GAME'}</div><div class="s1-venue">${g.venue}</div></div>
+      <div class="s1-period-row">
+        <span class="s1-period-badge">${g.period}</span>
+        ${g.clock?`<span class="s1-clock">${g.clock}</span>`:''}
+      </div>
+    </div>
+    <div class="s1-scoreboard">
+      <div class="s1-team-side">
+        <div class="s1-team-logo">${g.away.abbr}</div>
+        <div class="s1-team-info"><div class="s1-team-city">${g.away.city}</div><div class="s1-team-name">${g.away.name}</div><div class="s1-team-record">${g.away.record}</div></div>
+      </div>
+      <div class="s1-score-center">
+        <div class="s1-scores-row">
+          <span class="s1-big-score ${g.away.score>=g.home.score?'leading':''}">${g.away.score}</span>
+          <span class="s1-score-sep">–</span>
+          <span class="s1-big-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span>
+        </div>
+        ${renderQuarters(g,'s1')}
+      </div>
+      <div class="s1-team-side home">
+        <div class="s1-team-info" style="align-items:flex-end"><div class="s1-team-city">${g.home.city}</div><div class="s1-team-name">${g.home.name}</div><div class="s1-team-record">${g.home.record}</div></div>
+        <div class="s1-team-logo">${g.home.abbr}</div>
+      </div>
+    </div>
+    <div class="s1-bottom">
+      <div class="s1-stats-panel">
+        <div class="s1-panel-title">Team Stats</div>
+        ${stats.map(([label,aVal,hVal])=>{const isTO=label==='TO';return `<div class="stat-compare-row"><div class="scv-left ${better(aVal,hVal,isTO)?'better':''}">${aVal}</div><div class="scv-label">${label}</div><div class="scv-right ${better(hVal,aVal,isTO)?'better':''}">${hVal}</div></div>`;}).join('')}
+      </div>
+      <div class="s1-stats-panel">
+        <div class="s1-panel-title">Game Leaders</div>
+        ${[g.away,g.home].map(t=>`<div class="leaders-team-name">${t.name}</div>${['pts','reb','ast'].map(s=>`<div class="leader-row"><span class="leader-stat-type">${s}</span><span class="leader-player">${t.leaders[s].name}</span><span class="leader-value">${t.leaders[s].val}</span></div>`).join('')}`).join('')}
+      </div>
+    </div>`;
+}
+
+// ═══ SCREENS 2 & 3: BOXSCORE ═══
+function renderBoxscore(g,side){
+  const team=g[side],opp=side==='away'?g.home:g.away;
+  const cols=['MIN','PTS','FG','3PT','FT','REB','AST','STL','BLK','TO','+/-'];
+  const keys=['min','pts','fg','three','ft','reb','ast','stl','blk','to','pm'];
+  const allPlayers=[...team.boxscore.starters,...team.boxscore.bench];
+  const maxPts=Math.max(...allPlayers.map(p=>p.pts));
+  const totals={pts:allPlayers.reduce((s,p)=>s+p.pts,0),reb:allPlayers.reduce((s,p)=>s+p.reb,0),ast:allPlayers.reduce((s,p)=>s+p.ast,0),stl:allPlayers.reduce((s,p)=>s+p.stl,0),blk:allPlayers.reduce((s,p)=>s+p.blk,0),to:allPlayers.reduce((s,p)=>s+p.to,0)};
+  // Compute FG/3PT/FT totals
+  function sumShooting(players,key){let m=0,a=0;players.forEach(p=>{const[mm,aa]=p[key].split('-').map(Number);m+=mm;a+=aa;});return{made:m,att:a,str:`${m}-${a}`,pct:a>0?(m/a*100).toFixed(1)+'%':'—'};}
+  const fgT=sumShooting(allPlayers,'fg'),threeT=sumShooting(allPlayers,'three'),ftT=sumShooting(allPlayers,'ft');
+
+  return `
+    <div class="bs-scoreboard">
+      <div class="bs-team-side"><div class="bs-team-logo">${g.away.abbr}</div><div><div class="bs-team-name">${g.away.name}</div><div class="bs-team-record">${g.away.record}</div></div></div>
+      <div class="bs-score-center">
+        <div class="bs-scores-row"><span class="bs-big-score ${g.away.score>=g.home.score?'leading':''}">${g.away.score}</span><span class="bs-score-sep">–</span><span class="bs-big-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div>
+        ${renderQuarters(g,'bs')}
+        ${g.clock?`<div class="bs-period-clock">${g.period} — ${g.clock}</div>`:`<div class="bs-period-clock" style="color:var(--text-tertiary)">${g.period}</div>`}
+      </div>
+      <div class="bs-team-side home"><div><div class="bs-team-name">${g.home.name}</div><div class="bs-team-record">${g.home.record}</div></div><div class="bs-team-logo">${g.home.abbr}</div></div>
+    </div>
+    <div class="bs-tabs">
+      <div class="bs-tab ${side==='away'?'active':''}">${side==='away'?`<div class="bs-tab-dot"></div>`:''} ${g.away.city} ${g.away.name.toUpperCase()}</div>
+      <div class="bs-tab ${side==='home'?'active':''}">${side==='home'?`<div class="bs-tab-dot"></div>`:''} ${g.home.city} ${g.home.name.toUpperCase()}</div>
+    </div>
+    <div class="bs-table-wrap">
+      <table class="bs-table">
+        <thead><tr><th>PLAYER</th>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
+        <tbody>
+          <tr class="section-label"><td colspan="${cols.length+1}">STARTERS</td></tr>
+          ${team.boxscore.starters.map(p=>`<tr><td><span class="player-num">#${p.num}</span>${p.name}<span class="player-pos">${p.pos}</span></td>${keys.map(k=>`<td${k==='pts'&&p.pts===maxPts&&p.pts>0?' class="highlight"':''}>${p[k]}</td>`).join('')}</tr>`).join('')}
+          ${team.boxscore.bench.length?`<tr class="section-label"><td colspan="${cols.length+1}">BENCH</td></tr>${team.boxscore.bench.map(p=>`<tr><td><span class="player-num">#${p.num}</span>${p.name}<span class="player-pos">${p.pos}</span></td>${keys.map(k=>`<td${k==='pts'&&p.pts===maxPts&&p.pts>0?' class="highlight"':''}>${p[k]}</td>`).join('')}</tr>`).join('')}`:''}
+        </tbody>
+        <tfoot><tr><td>TEAM</td><td></td><td>${totals.pts}</td><td>${fgT.str}<span class="pct">${fgT.pct}</span></td><td>${threeT.str}<span class="pct">${threeT.pct}</span></td><td>${ftT.str}<span class="pct">${ftT.pct}</span></td><td>${totals.reb}</td><td>${totals.ast}</td><td>${totals.stl}</td><td>${totals.blk}</td><td>${totals.to}</td><td></td></tr></tfoot>
+      </table>
+    </div>`;
+}
+
+function renderGameScreens(g){
+  document.getElementById('screen1').innerHTML=renderScreen1(g);
+  document.getElementById('screen2').innerHTML=renderBoxscore(g,'away');
+  document.getElementById('screen3').innerHTML=renderBoxscore(g,'home');
+}
+
+// ═══ SCREEN ROTATION ═══
+let currentScreen=0;
+const SCREENS=['screen1','screen2','screen3'];
+function rotateScreen(){
+  const prev=currentScreen;currentScreen=(currentScreen+1)%3;
+  const prevEl=document.getElementById(SCREENS[prev]);
+  prevEl.classList.remove('active');prevEl.classList.add('exit-left');
+  setTimeout(()=>prevEl.classList.remove('exit-left'),500);
+  document.getElementById(SCREENS[currentScreen]).classList.add('active');
+  document.querySelectorAll('#screenDots .screen-dot').forEach((d,i)=>d.classList.toggle('active',i===currentScreen));
+}
+
+let currentGameIndex=0;
+function rotateGame(){
+  const live=MOCK_GAMES.filter(g=>g.status==='live');
+  const pool=live.length>0?live:MOCK_GAMES;
+  currentGameIndex=(currentGameIndex+1)%pool.length;
+  currentScreen=0;
+  SCREENS.forEach((id,i)=>{const el=document.getElementById(id);el.classList.remove('active','exit-left');if(i===0)el.classList.add('active');});
+  document.querySelectorAll('#screenDots .screen-dot').forEach((d,i)=>d.classList.toggle('active',i===0));
+  renderGameScreens(pool[currentGameIndex]);
+  renderMiniScores(MOCK_GAMES,pool[currentGameIndex].id);
+}
+
+function renderMiniScores(games,activeId){
+  document.getElementById('miniScores').innerHTML=games.map(g=>`<div class="mini-game ${g.id===activeId?'active':''}"><div class="mini-period ${g.status==='final'?'final':''}">${g.status==='final'?'FINAL':g.clock}</div><div class="mini-teams"><div class="mini-team-row"><span class="mini-team-abbr">${g.away.abbr}</span><span class="mini-score ${g.away.score>g.home.score?'leading':''}">${g.away.score}</span></div><div class="mini-team-row"><span class="mini-team-abbr">${g.home.abbr}</span><span class="mini-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div></div></div>`).join('');
+}
+
+function renderTicker(headlines){
+  const items=[...headlines,...headlines];
+  const c=document.getElementById('tickerContent');
+  c.innerHTML=items.map(h=>`<div class="ticker-item">${h.isNew?'<span class="ticker-badge">NEW</span>':''}<span class="ticker-headline">${h.text}</span><span class="ticker-time">${h.time}</span></div><span class="ticker-sep">●</span>`).join('');
+  requestAnimationFrame(()=>{const w=c.scrollWidth/2;c.style.animationDuration=(w/CONFIG.tickerSpeed)+'s';});
+}
+
+function renderFeed(posts){
+  document.getElementById('feedContainer').innerHTML=posts.map((p,i)=>`<div class="feed-post" style="animation-delay:${i*0.05}s"><div class="post-header"><div class="post-avatar">${p.avatar}</div><div class="post-meta"><div class="post-author">${p.author}</div><div class="post-handle">${p.handle}</div></div><div class="post-time">${p.time}</div></div><div class="post-text">${p.text}</div></div>`).join('');
+}
+
+let currentRankingIndex=0;
+function renderRankings(r){const p=document.getElementById('rankingsPanel');p.style.animation='none';p.offsetHeight;p.style.animation='';const dots=MOCK_RANKINGS.map((_,i)=>`<div class="rankings-progress-dot ${i===currentRankingIndex?'active':''}"></div>`).join('');p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div><table class="rankings-table"><thead><tr>${r.columns.map(c=>`<th>${c}</th>`).join('')}</tr></thead><tbody>${r.data.map(row=>`<tr><td><span class="rank-num ${row[0]<=3?'top-3':''}">${row[0]}</span></td><td><span class="rank-player">${row[1]}</span><span class="rank-team">${row[2]}</span></td><td></td><td><span class="rank-value">${row[3]}</span></td></tr>`).join('')}</tbody></table>`;}
+function renderNextGames(games){document.getElementById('nextGamesList').innerHTML=games.map(g=>`<div class="next-game-item"><span class="next-game-teams">${g.away} @ ${g.home}</span><span class="next-game-time">${g.time}</span></div>`).join('');}
+function rotateRankings(){currentRankingIndex=(currentRankingIndex+1)%MOCK_RANKINGS.length;renderRankings(MOCK_RANKINGS[currentRankingIndex]);}
+
+let currentMode=null;
+function setMode(mode){if(mode===currentMode)return;currentMode=mode;const fg=document.getElementById('featuredGame'),ms=document.getElementById('miniScores'),rm=document.getElementById('rankingsMode'),lb=document.getElementById('liveBadge');if(mode==='live'){fg.classList.remove('hidden');ms.classList.remove('hidden');rm.classList.remove('active');lb.style.display='flex';}else{fg.classList.add('hidden');ms.classList.add('hidden');rm.classList.add('active');lb.style.display='none';renderNextGames(MOCK_NEXT_GAMES);renderRankings(MOCK_RANKINGS[currentRankingIndex]);}}
+function determineAutoMode(games){if(games.some(g=>g.status==='live'))return'live';if(games.some(g=>g.status==='final'))return'live';return'rankings';}
+
+function simulateScoreUpdate(){MOCK_GAMES.forEach(g=>{if(g.status==='live'){if(Math.random()>0.5){const side=Math.random()>0.5?'home':'away';g[side].score+=Math.random()>0.7?3:2;}let[m,s]=g.clock.split(':').map(Number);s-=Math.floor(Math.random()*20)+5;if(s<0){m--;s+=60;}if(m<0)m=11;g.clock=`${m}:${s.toString().padStart(2,'0')}`;}});if(currentMode==='live'){const pool=MOCK_GAMES.filter(g=>g.status==='live');if(pool.length>0){const idx=currentGameIndex%pool.length;renderGameScreens(pool[idx]);renderMiniScores(MOCK_GAMES,pool[idx].id);}}}
+
+function init(){
+  renderGameScreens(MOCK_GAMES[0]);renderMiniScores(MOCK_GAMES,MOCK_GAMES[0].id);
+  renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);
+  setMode(determineAutoMode(MOCK_GAMES));
+  setInterval(rotateScreen,CONFIG.screenRotateInterval);
+  setInterval(rotateGame,CONFIG.gameRotateInterval);
+  setInterval(rotateRankings,CONFIG.rankingsRotateInterval);
+  setInterval(simulateScoreUpdate,5000);
+  setInterval(()=>setMode(determineAutoMode(MOCK_GAMES)),60000);
+  document.addEventListener('keydown',e=>{if(e.key==='1')setMode('live');if(e.key==='2')setMode('rankings');});
+}
+init();
+</script>
+</body>
+</html>

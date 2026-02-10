@@ -7,9 +7,8 @@ Phase 2: nba_api scores (TODO)
 Phase 3: Google Sheets rankings (TODO)
 """
 
-import time
 import logging
-import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from flask import Flask, jsonify, send_from_directory
@@ -34,61 +33,87 @@ headlines_cache = TTLCache(maxsize=1, ttl=config.HEADLINES_CACHE_TTL_SECONDS)
 last_good_bluesky = []
 last_good_headlines = []
 
+# Reusable session for connection pooling
+_http_session = requests.Session()
+_http_session.headers.update({"User-Agent": "HoopsHypeLive/1.0"})
+
 
 # ═══════════════════════════════════════
 # BLUESKY FEED
 # ═══════════════════════════════════════
 
+BLUESKY_MAX_WORKERS = 20  # concurrent threads for fetching feeds
+
+
+def _fetch_one_feed(handle):
+    """Fetch recent posts for a single Bluesky handle. Returns list of post dicts."""
+    posts = []
+    try:
+        # getAuthorFeed accepts handles directly — no need to resolve DID first
+        feed_url = (
+            f"https://bsky.social/xrpc/app.bsky.feed.getAuthorFeed"
+            f"?actor={handle}&limit=3&filter=posts_no_replies"
+        )
+        resp = _http_session.get(feed_url, timeout=8)
+        resp.raise_for_status()
+        feed = resp.json().get("feed", [])
+
+        for item in feed:
+            post = item.get("post", {})
+            record = post.get("record", {})
+            author = post.get("author", {})
+
+            # Skip reposts
+            if not config.BLUESKY_SHOW_REPOSTS and item.get("reason"):
+                continue
+
+            # Skip replies (belt-and-suspenders: filter should exclude, but check anyway)
+            if record.get("reply"):
+                continue
+
+            text = record.get("text", "").strip()
+            if not text:
+                continue
+
+            created = record.get("createdAt", "")
+
+            posts.append({
+                "author": author.get("displayName", handle),
+                "handle": f"@{author.get('handle', handle)}",
+                "avatar": _initials(author.get("displayName", handle)),
+                "text": text,
+                "time": _time_ago(created),
+                "timestamp": created,
+            })
+
+    except Exception as e:
+        log.debug(f"Bluesky fetch failed for {handle}: {e}")
+
+    return posts
+
+
 def fetch_bluesky_posts():
-    """Fetch recent posts from configured Bluesky accounts via public API."""
+    """Fetch recent posts from configured Bluesky accounts via public API (parallelized)."""
     global last_good_bluesky
 
     # Return cached if available
     if "posts" in bluesky_cache:
         return bluesky_cache["posts"]
 
+    log.info(f"Fetching Bluesky feeds for {len(config.BLUESKY_ACCOUNTS)} accounts...")
+
     all_posts = []
-    for handle in config.BLUESKY_ACCOUNTS:
-        try:
-            # Resolve DID
-            resolve_url = f"https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle={handle}"
-            resp = requests.get(resolve_url, timeout=10)
-            resp.raise_for_status()
-            did = resp.json().get("did")
-            if not did:
-                continue
-
-            # Fetch author feed
-            feed_url = f"https://bsky.social/xrpc/app.bsky.feed.getAuthorFeed?actor={did}&limit=5&filter=posts_no_replies"
-            resp = requests.get(feed_url, timeout=10)
-            resp.raise_for_status()
-            feed = resp.json().get("feed", [])
-
-            for item in feed:
-                post = item.get("post", {})
-                record = post.get("record", {})
-                author = post.get("author", {})
-
-                # Skip reposts if configured
-                if not config.BLUESKY_SHOW_REPOSTS and item.get("reason"):
-                    continue
-
-                # Parse timestamp
-                created = record.get("createdAt", "")
-                time_ago = _time_ago(created)
-
-                all_posts.append({
-                    "author": author.get("displayName", handle),
-                    "handle": f"@{author.get('handle', handle)}",
-                    "avatar": _initials(author.get("displayName", handle)),
-                    "text": record.get("text", ""),
-                    "time": time_ago,
-                    "timestamp": created,
-                })
-
-        except Exception as e:
-            log.warning(f"Bluesky fetch failed for {handle}: {e}")
-            continue
+    with ThreadPoolExecutor(max_workers=BLUESKY_MAX_WORKERS) as executor:
+        futures = {
+            executor.submit(_fetch_one_feed, handle): handle
+            for handle in config.BLUESKY_ACCOUNTS
+        }
+        for future in as_completed(futures):
+            try:
+                posts = future.result()
+                all_posts.extend(posts)
+            except Exception as e:
+                log.debug(f"Bluesky worker error: {e}")
 
     # Sort by timestamp (newest first) and limit
     all_posts.sort(key=lambda p: p.get("timestamp", ""), reverse=True)
@@ -97,6 +122,7 @@ def fetch_bluesky_posts():
     if all_posts:
         last_good_bluesky = all_posts
         bluesky_cache["posts"] = all_posts
+        log.info(f"Fetched {len(all_posts)} Bluesky posts")
     else:
         log.info("No new Bluesky posts, serving last good data")
 
@@ -117,7 +143,7 @@ def _time_ago(iso_str):
             return f"{int(diff // 3600)}h"
         else:
             return f"{int(diff // 86400)}d"
-    except:
+    except Exception:
         return ""
 
 
@@ -144,7 +170,8 @@ def fetch_headlines():
 
     try:
         headers = {
-            "User-Agent": "HoopsHypeLive/1.0 (internal broadcast tool)"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         }
         resp = requests.get(config.HEADLINES_URL, headers=headers, timeout=15)
         resp.raise_for_status()
@@ -152,15 +179,31 @@ def fetch_headlines():
         soup = BeautifulSoup(resp.text, "lxml")
         items = []
 
-        # HoopsHype rumors page structure — look for article headlines
-        # This selector may need updating if the page structure changes
-        for article in soup.select("div.rumor-block, article, .post-loop"):
-            # Try multiple selectors for resilience
+        # Strategy 1: WordPress post-loop / article entries (most common HoopsHype structure)
+        # HoopsHype is a USA Today / Gannett WordPress site.
+        # Rumors page lists posts as <article> or <div> entries with headlines in <h2>/<h3> links.
+        selectors = [
+            "article",                    # standard WP article tags
+            "div.post-loop-item",         # common WP theme pattern
+            "div.entry-content li",       # sometimes rumors are listed as <li> items
+            "div[class*='post']",         # any div with 'post' in class
+        ]
+
+        articles = []
+        for sel in selectors:
+            articles = soup.select(sel)
+            if articles:
+                break
+
+        for article in articles:
+            # Find headline text — try multiple patterns
             title_el = (
                 article.select_one("h2 a") or
                 article.select_one("h3 a") or
-                article.select_one(".rumor-title a") or
-                article.select_one("a.title")
+                article.select_one("h2") or
+                article.select_one("h3") or
+                article.select_one("a[class*='title']") or
+                article.select_one("a[class*='headline']")
             )
             if not title_el:
                 continue
@@ -169,17 +212,25 @@ def fetch_headlines():
             if not text or len(text) < 10:
                 continue
 
-            # Try to get timestamp
-            time_el = article.select_one("time, .date, .timestamp, .post-date")
+            # Deduplicate
+            if any(item["text"] == text for item in items):
+                continue
+
+            # Find timestamp
+            time_el = article.select_one("time[datetime]")
+            if not time_el:
+                time_el = article.select_one("time, .date, .timestamp, .post-date, span[class*='date'], span[class*='time']")
+
             time_str = ""
             is_new = False
 
             if time_el:
-                time_str = time_el.get_text(strip=True)
-                # Check if it has a datetime attribute
                 dt_attr = time_el.get("datetime", "")
+                time_str = time_el.get_text(strip=True)
+
                 if dt_attr:
                     is_new = _is_recent(dt_attr, config.HEADLINES_NEW_THRESHOLD_MINUTES)
+                    time_str = _time_ago(dt_attr) or time_str
 
             items.append({
                 "text": text,
@@ -189,6 +240,15 @@ def fetch_headlines():
 
             if len(items) >= config.HEADLINES_MAX_ITEMS:
                 break
+
+        # Strategy 2: If no articles found, try to find headlines in a simpler flat list
+        if not items:
+            for link in soup.select("a[href*='/rumors/'], a[href*='/rumor/']"):
+                text = link.get_text(strip=True)
+                if text and len(text) >= 20 and not any(item["text"] == text for item in items):
+                    items.append({"text": text, "time": "", "isNew": False})
+                    if len(items) >= config.HEADLINES_MAX_ITEMS:
+                        break
 
         if items:
             last_good_headlines = items
@@ -210,7 +270,7 @@ def _is_recent(iso_str, threshold_minutes):
         now = datetime.now(timezone.utc)
         diff_minutes = (now - dt).total_seconds() / 60
         return diff_minutes <= threshold_minutes
-    except:
+    except Exception:
         return False
 
 

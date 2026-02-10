@@ -8,8 +8,10 @@ Phase 3: Google Sheets rankings (TODO)
 """
 
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from pathlib import Path
 
 from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
@@ -20,7 +22,11 @@ from cachetools import TTLCache
 import config
 
 # ─── Setup ───
-app = Flask(__name__, static_folder="..")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent  # hoopshype-live/
+
+# static_folder=None prevents Flask from registering a catch-all static route
+# (static_folder=".." was generating a broken /../<path:filename> route that shadowed /api/ endpoints)
+app = Flask(__name__, static_folder=None)
 CORS(app)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("hoopshype-live")
@@ -33,9 +39,9 @@ headlines_cache = TTLCache(maxsize=1, ttl=config.HEADLINES_CACHE_TTL_SECONDS)
 last_good_bluesky = []
 last_good_headlines = []
 
-# Reusable session for connection pooling
-_http_session = requests.Session()
-_http_session.headers.update({"User-Agent": "HoopsHypeLive/1.0"})
+# HTTP request defaults (no shared Session — requests.Session is NOT thread-safe
+# and we call from 20+ concurrent ThreadPoolExecutor workers)
+_HTTP_HEADERS = {"User-Agent": "HoopsHypeLive/1.0"}
 
 
 # ═══════════════════════════════════════
@@ -54,7 +60,7 @@ def _fetch_one_feed(handle):
             f"https://bsky.social/xrpc/app.bsky.feed.getAuthorFeed"
             f"?actor={handle}&limit=3&filter=posts_no_replies"
         )
-        resp = _http_session.get(feed_url, timeout=8)
+        resp = requests.get(feed_url, headers=_HTTP_HEADERS, timeout=8)
         resp.raise_for_status()
         feed = resp.json().get("feed", [])
 
@@ -281,7 +287,7 @@ def _is_recent(iso_str, threshold_minutes):
 @app.route("/")
 def serve_index():
     """Serve the broadcast overlay page."""
-    return send_from_directory("..", "index.html")
+    return send_from_directory(PROJECT_ROOT, "index.html")
 
 
 @app.route("/api/bluesky")
@@ -334,4 +340,5 @@ if __name__ == "__main__":
         host=config.SERVER_HOST,
         port=config.SERVER_PORT,
         debug=config.DEBUG,
+        threaded=True,  # handle concurrent requests (Bluesky fetch blocks for 30s+)
     )

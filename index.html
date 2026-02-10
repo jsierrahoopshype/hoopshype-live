@@ -543,7 +543,10 @@ let liveFeed=null;    // null = not yet loaded from API
 let liveHeadlines=null;
 
 function pollBluesky(){
-  fetch('/api/bluesky').then(r=>r.json()).then(data=>{
+  fetch('/api/bluesky').then(r=>{
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }).then(data=>{
     if(data.posts&&data.posts.length>0){
       liveFeed=data.posts;
       renderFeed(liveFeed);
@@ -553,7 +556,10 @@ function pollBluesky(){
 }
 
 function pollHeadlines(){
-  fetch('/api/headlines').then(r=>r.json()).then(data=>{
+  fetch('/api/headlines').then(r=>{
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }).then(data=>{
     if(data.headlines&&data.headlines.length>0){
       liveHeadlines=data.headlines;
       renderTicker(liveHeadlines);

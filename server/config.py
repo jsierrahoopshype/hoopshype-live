@@ -387,7 +387,9 @@ BLUESKY_CACHE_TTL_SECONDS = 90       # Cache lifetime before refetch
 # HEADLINES TICKER
 # ═══════════════════════════════════════
 
-HEADLINES_URL = "https://hoopshype.com/rumors/"
+HEADLINES_RSS_URL = "https://hoopshype.com/rumors/feed/"       # Primary: RSS feed
+HEADLINES_RSS_FALLBACK_URL = "https://hoopshype.com/feed/"    # Fallback RSS: full site
+HEADLINES_URL = "https://hoopshype.com/rumors/"               # Fallback: HTML scraping
 HEADLINES_REFRESH_SECONDS = 180      # How often to scrape (3 min)
 HEADLINES_MAX_ITEMS = 20             # Max headlines in ticker
 HEADLINES_CACHE_TTL_SECONDS = 150    # Cache lifetime

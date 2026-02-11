@@ -90,6 +90,7 @@ def _fetch_one_feed(handle):
                 "author": author.get("displayName", handle),
                 "handle": f"@{author.get('handle', handle)}",
                 "avatar": _initials(author.get("displayName", handle)),
+                "avatarUrl": author.get("avatar", ""),
                 "text": text,
                 "time": _time_ago(created),
                 "timestamp": created,

@@ -58,10 +58,10 @@ def _fetch_one_feed(handle):
     """Fetch recent posts for a single Bluesky handle. Returns list of post dicts."""
     posts = []
     try:
-        # getAuthorFeed accepts handles directly — no need to resolve DID first
+        # Public API — no auth required (bsky.social/xrpc requires auth)
         feed_url = (
-            f"https://bsky.social/xrpc/app.bsky.feed.getAuthorFeed"
-            f"?actor={handle}&limit=3&filter=posts_no_replies"
+            f"https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed"
+            f"?actor={handle}&limit=5&filter=posts_no_replies"
         )
         resp = requests.get(feed_url, headers=_HTTP_HEADERS, timeout=8)
         resp.raise_for_status()
@@ -112,17 +112,27 @@ def fetch_bluesky_posts():
     log.info(f"Fetching Bluesky feeds for {len(config.BLUESKY_ACCOUNTS)} accounts...")
 
     all_posts = []
+    success_count = 0
+    fail_count = 0
     with ThreadPoolExecutor(max_workers=BLUESKY_MAX_WORKERS) as executor:
         futures = {
             executor.submit(_fetch_one_feed, handle): handle
             for handle in config.BLUESKY_ACCOUNTS
         }
         for future in as_completed(futures):
+            handle = futures[future]
             try:
                 posts = future.result()
-                all_posts.extend(posts)
+                if posts:
+                    all_posts.extend(posts)
+                    success_count += 1
+                else:
+                    fail_count += 1
             except Exception as e:
-                log.debug(f"Bluesky worker error: {e}")
+                fail_count += 1
+                log.debug(f"Bluesky worker error for {handle}: {e}")
+
+    log.info(f"Bluesky fetch done: {success_count} accounts returned posts, {fail_count} empty/failed")
 
     # Sort by timestamp (newest first) and limit
     all_posts.sort(key=lambda p: p.get("timestamp", ""), reverse=True)
@@ -131,9 +141,9 @@ def fetch_bluesky_posts():
     if all_posts:
         last_good_bluesky = all_posts
         bluesky_cache["posts"] = all_posts
-        log.info(f"Fetched {len(all_posts)} Bluesky posts")
+        log.info(f"Cached {len(all_posts)} Bluesky posts (newest: {all_posts[0].get('author', '?')})")
     else:
-        log.info("No new Bluesky posts, serving last good data")
+        log.warning("No Bluesky posts fetched — check network or API endpoint")
 
     return last_good_bluesky
 

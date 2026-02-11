@@ -397,11 +397,15 @@ HEADLINES_NEW_THRESHOLD_MINUTES = 60 # Headlines newer than this get "NEW" badge
 
 
 # ═══════════════════════════════════════
-# LIVE SCORES (Phase 2 — not yet active)
+# LIVE SCORES (Phase 2)
 # ═══════════════════════════════════════
 
-SCORES_REFRESH_SECONDS = 30
+SCORES_REFRESH_SECONDS = 30          # Frontend polling interval
+SCORES_CACHE_TTL_LIVE = 30           # Cache TTL when live games are active
+SCORES_CACHE_TTL_FINAL = 300         # Cache TTL when all games are final (5 min)
 SCORES_PRIORITY_TEAMS = []           # e.g. ["LAL", "BOS"] — featured more often
+SCORES_SCOREBOARD_URL = "https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json"
+SCORES_BOXSCORE_URL = "https://cdn.nba.com/static/json/liveData/boxscore/boxscore_{game_id}.json"
 
 
 # ═══════════════════════════════════════

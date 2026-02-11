@@ -503,15 +503,18 @@ function rotateScreen(){
 }
 
 let currentGameIndex=0;
+function getGames(){return liveGames&&liveGames.length>0?liveGames:MOCK_GAMES;}
 function rotateGame(){
-  const live=MOCK_GAMES.filter(g=>g.status==='live');
-  const pool=live.length>0?live:MOCK_GAMES;
+  const allGames=getGames();
+  const live=allGames.filter(g=>g.status==='live');
+  const pool=live.length>0?live:allGames.filter(g=>g.status!=='scheduled');
+  if(pool.length===0)return;
   currentGameIndex=(currentGameIndex+1)%pool.length;
   currentScreen=0;
   SCREENS.forEach((id,i)=>{const el=document.getElementById(id);el.classList.remove('active','exit-left');if(i===0)el.classList.add('active');});
   document.querySelectorAll('#screenDots .screen-dot').forEach((d,i)=>d.classList.toggle('active',i===0));
   renderGameScreens(pool[currentGameIndex]);
-  renderMiniScores(MOCK_GAMES,pool[currentGameIndex].id);
+  renderMiniScores(allGames,pool[currentGameIndex].id);
 }
 
 function renderMiniScores(games,activeId){
@@ -541,14 +544,15 @@ function renderNextGames(games){document.getElementById('nextGamesList').innerHT
 function rotateRankings(){currentRankingIndex=(currentRankingIndex+1)%MOCK_RANKINGS.length;renderRankings(MOCK_RANKINGS[currentRankingIndex]);}
 
 let currentMode=null;
-function setMode(mode){if(mode===currentMode)return;currentMode=mode;const fg=document.getElementById('featuredGame'),ms=document.getElementById('miniScores'),rm=document.getElementById('rankingsMode'),lb=document.getElementById('liveBadge');if(mode==='live'){fg.classList.remove('hidden');ms.classList.remove('hidden');rm.classList.remove('active');lb.style.display='flex';}else{fg.classList.add('hidden');ms.classList.add('hidden');rm.classList.add('active');lb.style.display='none';renderNextGames(MOCK_NEXT_GAMES);renderRankings(MOCK_RANKINGS[currentRankingIndex]);}}
-function determineAutoMode(games){if(games.some(g=>g.status==='live'))return'live';if(games.some(g=>g.status==='final'))return'live';return'rankings';}
+function setMode(mode){if(mode===currentMode)return;currentMode=mode;const fg=document.getElementById('featuredGame'),ms=document.getElementById('miniScores'),rm=document.getElementById('rankingsMode'),lb=document.getElementById('liveBadge');if(mode==='live'){fg.classList.remove('hidden');ms.classList.remove('hidden');rm.classList.remove('active');lb.style.display='flex';}else{fg.classList.add('hidden');ms.classList.add('hidden');rm.classList.add('active');lb.style.display='none';const scheduled=getGames().filter(g=>g.status==='scheduled');if(scheduled.length>0){renderNextGames(scheduled.map(g=>({away:g.away.abbr,home:g.home.abbr,time:g.clock||'TBD'})));}else{renderNextGames(MOCK_NEXT_GAMES);}renderRankings(MOCK_RANKINGS[currentRankingIndex]);}}
+function determineAutoMode(games){if(!games||games.length===0)return'rankings';if(games.some(g=>g.status==='live'))return'live';if(games.some(g=>g.status==='final'))return'live';return'rankings';}
 
-function simulateScoreUpdate(){MOCK_GAMES.forEach(g=>{if(g.status==='live'){if(Math.random()>0.5){const side=Math.random()>0.5?'home':'away';g[side].score+=Math.random()>0.7?3:2;}let[m,s]=g.clock.split(':').map(Number);s-=Math.floor(Math.random()*20)+5;if(s<0){m--;s+=60;}if(m<0)m=11;g.clock=`${m}:${s.toString().padStart(2,'0')}`;}});if(currentMode==='live'){const pool=MOCK_GAMES.filter(g=>g.status==='live');if(pool.length>0){const idx=currentGameIndex%pool.length;renderGameScreens(pool[idx]);renderMiniScores(MOCK_GAMES,pool[idx].id);}}}
+function simulateScoreUpdate(){if(liveGames)return;MOCK_GAMES.forEach(g=>{if(g.status==='live'){if(Math.random()>0.5){const side=Math.random()>0.5?'home':'away';g[side].score+=Math.random()>0.7?3:2;}let[m,s]=g.clock.split(':').map(Number);s-=Math.floor(Math.random()*20)+5;if(s<0){m--;s+=60;}if(m<0)m=11;g.clock=`${m}:${s.toString().padStart(2,'0')}`;}});if(currentMode==='live'){const pool=MOCK_GAMES.filter(g=>g.status==='live');if(pool.length>0){const idx=currentGameIndex%pool.length;renderGameScreens(pool[idx]);renderMiniScores(MOCK_GAMES,pool[idx].id);}}}
 
 // ═══ LIVE API POLLING ═══
 let liveFeed=null;    // null = not yet loaded from API
 let liveHeadlines=null;
+let liveGames=null;   // null = not yet loaded; use MOCK_GAMES as fallback
 
 function pollBluesky(){
   console.log('[API] Polling /api/bluesky...');
@@ -584,6 +588,36 @@ function pollHeadlines(){
   }).catch(e=>console.warn('[API] Headlines poll failed:',e));
 }
 
+function pollScores(){
+  console.log('[API] Polling /api/scores...');
+  fetch('/api/scores').then(r=>{
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }).then(data=>{
+    console.log('[API] Scores response:',data.count,'games, hasLive:',data.hasLive);
+    if(data.games&&data.games.length>0){
+      liveGames=data.games;
+      // Re-render current game view
+      const allGames=getGames();
+      const live=allGames.filter(g=>g.status==='live');
+      const pool=live.length>0?live:allGames.filter(g=>g.status!=='scheduled');
+      if(pool.length>0){
+        const idx=currentGameIndex%pool.length;
+        renderGameScreens(pool[idx]);
+        renderMiniScores(allGames,pool[idx].id);
+      }
+      // Update mode: live if any active/final games, rankings if all scheduled or no games
+      const mode=determineAutoMode(allGames);
+      setMode(mode);
+      console.log('[API] Scores rendered:',data.count,'games, mode:',mode);
+    }else{
+      console.log('[API] No games today — switching to rankings mode');
+      liveGames=[];
+      setMode('rankings');
+    }
+  }).catch(e=>console.warn('[API] Scores poll failed:',e));
+}
+
 function init(){
   renderGameScreens(MOCK_GAMES[0]);renderMiniScores(MOCK_GAMES,MOCK_GAMES[0].id);
   // Show mock data immediately as fallback
@@ -593,12 +627,13 @@ function init(){
   setInterval(rotateGame,CONFIG.gameRotateInterval);
   setInterval(rotateRankings,CONFIG.rankingsRotateInterval);
   setInterval(simulateScoreUpdate,5000);
-  setInterval(()=>setMode(determineAutoMode(MOCK_GAMES)),60000);
+  setInterval(()=>setMode(determineAutoMode(getGames())),60000);
   document.addEventListener('keydown',e=>{if(e.key==='1')setMode('live');if(e.key==='2')setMode('rankings');});
   // Start live API polling — fetch immediately, then on interval
-  pollBluesky();pollHeadlines();
+  pollBluesky();pollHeadlines();pollScores();
   setInterval(pollBluesky,120000);   // every 2 minutes
   setInterval(pollHeadlines,180000); // every 3 minutes
+  setInterval(pollScores,30000);     // every 30 seconds
 }
 init();
 </script>

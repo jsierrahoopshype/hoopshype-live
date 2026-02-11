@@ -4,3 +4,4 @@ requests==2.32.3
 beautifulsoup4==4.12.3
 lxml==5.3.0
 cachetools==5.5.1
+nba_api==1.5.2

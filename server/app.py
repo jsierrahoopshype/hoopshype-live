@@ -3,12 +3,13 @@ HoopsHype Live — Flask Server
 Serves the broadcast page and API endpoints for live data.
 
 Phase 1: Bluesky feed + HoopsHype headlines
-Phase 2: nba_api scores (TODO)
+Phase 2: Live NBA scores via nba.com CDN
 Phase 3: Google Sheets rankings (TODO)
 """
 
 import logging
 import os
+import re
 import threading
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,10 +38,13 @@ log = logging.getLogger("hoopshype-live")
 # ─── Caches ───
 bluesky_cache = TTLCache(maxsize=1, ttl=config.BLUESKY_CACHE_TTL_SECONDS)
 headlines_cache = TTLCache(maxsize=1, ttl=config.HEADLINES_CACHE_TTL_SECONDS)
+# Scores cache uses dynamic TTL — start with live game TTL, rebuilt as needed
+scores_cache = TTLCache(maxsize=1, ttl=config.SCORES_CACHE_TTL_LIVE)
 
 # Fallback data (served when fetch fails)
 last_good_bluesky = []
 last_good_headlines = []
+last_good_scores = []
 
 # HTTP request defaults (no shared Session — requests.Session is NOT thread-safe
 # and we call from 20+ concurrent ThreadPoolExecutor workers)
@@ -397,6 +401,357 @@ def _is_recent(iso_str, threshold_minutes):
 
 
 # ═══════════════════════════════════════
+# LIVE NBA SCORES (Phase 2)
+# ═══════════════════════════════════════
+
+# NBA CDN headers — mimic browser to avoid 403
+_NBA_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://www.nba.com/",
+    "Accept": "application/json",
+}
+
+
+def _parse_game_clock(iso_duration):
+    """Convert ISO 8601 duration (PT04M32.00S) → '4:32'. Returns '' if empty/invalid."""
+    if not iso_duration or iso_duration in ("PT00M00.00S", ""):
+        return ""
+    m = re.match(r"PT(\d+)M([\d.]+)S", iso_duration)
+    if m:
+        minutes = int(m.group(1))
+        seconds = int(float(m.group(2)))
+        return f"{minutes}:{seconds:02d}"
+    return ""
+
+
+def _period_label(period, game_status):
+    """Convert period number + status → display label like '3RD QTR', 'HALFTIME', 'FINAL'."""
+    if game_status == 3:
+        return "FINAL"
+    if game_status == 1:
+        return "SCHEDULED"
+    # game_status == 2 → live
+    if period == 0:
+        return "PREGAME"
+    ordinals = {1: "1ST", 2: "2ND", 3: "3RD", 4: "4TH"}
+    if period in ordinals:
+        return f"{ordinals[period]} QTR"
+    return f"OT{period - 4}" if period > 4 else f"Q{period}"
+
+
+def _game_status_str(game_status):
+    """Map nba_api gameStatus int → frontend status string."""
+    return {1: "scheduled", 2: "live", 3: "final"}.get(game_status, "scheduled")
+
+
+def _format_record(wins, losses):
+    """Format team record string."""
+    return f"{wins}-{losses}"
+
+
+def _build_quarters(periods_list, total_periods=4):
+    """Convert nba periods array → quarter score arrays for away/home.
+
+    nba_api periods: [{"period": 1, "periodType": "REGULAR", "score": 28}, ...]
+    Frontend expects: [28, 31, null, null] for a 2nd-quarter game.
+    """
+    scores = [None] * max(total_periods, len(periods_list))
+    for p in periods_list:
+        idx = p.get("period", 1) - 1
+        if 0 <= idx < len(scores):
+            scores[idx] = p.get("score", 0)
+    return scores[:max(total_periods, len(periods_list))]
+
+
+def _leader_name(full_name):
+    """Convert 'Jayson Tatum' → 'J. Tatum'."""
+    if not full_name:
+        return "—"
+    parts = full_name.strip().split()
+    if len(parts) >= 2:
+        return f"{parts[0][0]}. {parts[-1]}"
+    return full_name
+
+
+def _fetch_boxscore(game_id):
+    """Fetch detailed boxscore for a single game from nba.com CDN."""
+    url = config.SCORES_BOXSCORE_URL.format(game_id=game_id)
+    try:
+        resp = requests.get(url, headers=_NBA_HEADERS, timeout=10)
+        resp.raise_for_status()
+        return resp.json().get("game", {})
+    except Exception as e:
+        log.debug(f"Boxscore fetch failed for {game_id}: {e}")
+        return None
+
+
+def _transform_player(player):
+    """Transform a single player from nba_api boxscore format → frontend format."""
+    stats = player.get("statistics", {})
+    fg_made = stats.get("fieldGoalsMade", 0)
+    fg_att = stats.get("fieldGoalsAttempted", 0)
+    three_made = stats.get("threePointersMade", 0)
+    three_att = stats.get("threePointersAttempted", 0)
+    ft_made = stats.get("freeThrowsMade", 0)
+    ft_att = stats.get("freeThrowsAttempted", 0)
+
+    # Minutes: "PT24M30.00S" → "24" (just the integer minutes)
+    minutes_iso = stats.get("minutesCalculated", "") or stats.get("minutes", "")
+    min_match = re.match(r"PT(\d+)M", minutes_iso) if minutes_iso else None
+    minutes = min_match.group(1) if min_match else "0"
+
+    plus_minus = stats.get("plusMinusPoints", 0)
+    pm_str = f"+{plus_minus}" if plus_minus > 0 else str(plus_minus)
+
+    return {
+        "num": player.get("jerseyNum", ""),
+        "name": player.get("nameI", player.get("firstName", "") + " " + player.get("familyName", "")),
+        "pos": player.get("position", ""),
+        "min": minutes,
+        "pts": stats.get("points", 0),
+        "reb": stats.get("reboundsTotal", 0),
+        "ast": stats.get("assists", 0),
+        "stl": stats.get("steals", 0),
+        "blk": stats.get("blocks", 0),
+        "fg": f"{fg_made}-{fg_att}",
+        "three": f"{three_made}-{three_att}",
+        "ft": f"{ft_made}-{ft_att}",
+        "pm": pm_str,
+        "to": stats.get("turnovers", 0),
+    }
+
+
+def _transform_team_boxscore(team_data):
+    """Transform nba_api team boxscore → frontend boxscore format (starters + bench)."""
+    players = team_data.get("players", [])
+    starters = []
+    bench = []
+    for p in players:
+        transformed = _transform_player(p)
+        status = p.get("status", "ACTIVE")
+        if status != "ACTIVE":
+            continue
+        if p.get("starter", "") == "1":
+            starters.append(transformed)
+        else:
+            bench.append(transformed)
+    return {"starters": starters, "bench": bench}
+
+
+def _team_stats_from_boxscore(team_data):
+    """Extract team-level stats from boxscore → frontend stats format."""
+    stats = team_data.get("statistics", {})
+    return {
+        "fgPct": f"{stats.get('fieldGoalsPercentage', 0) * 100:.1f}",
+        "threePct": f"{stats.get('threePointersPercentage', 0) * 100:.1f}",
+        "ftPct": f"{stats.get('freeThrowsPercentage', 0) * 100:.1f}",
+        "reb": stats.get("reboundsTotal", 0),
+        "ast": stats.get("assists", 0),
+        "stl": stats.get("steals", 0),
+        "blk": stats.get("blocks", 0),
+        "to": stats.get("turnovers", 0),
+    }
+
+
+def _leaders_from_scoreboard(leaders_data):
+    """Transform gameLeaders from scoreboard → frontend leaders format."""
+    return {
+        "pts": {
+            "name": _leader_name(leaders_data.get("name", "")),
+            "val": leaders_data.get("points", 0),
+        },
+        "reb": {
+            "name": _leader_name(leaders_data.get("name", "")),
+            "val": leaders_data.get("rebounds", 0),
+        },
+        "ast": {
+            "name": _leader_name(leaders_data.get("name", "")),
+            "val": leaders_data.get("assists", 0),
+        },
+    }
+
+
+def _leaders_from_boxscore_players(players):
+    """Compute game leaders from boxscore player stats (more accurate than scoreboard leaders)."""
+    pts_leader = max(players, key=lambda p: p.get("statistics", {}).get("points", 0), default={})
+    reb_leader = max(players, key=lambda p: p.get("statistics", {}).get("reboundsTotal", 0), default={})
+    ast_leader = max(players, key=lambda p: p.get("statistics", {}).get("assists", 0), default={})
+
+    def _leader(player, stat_key):
+        name = player.get("nameI", "") or (player.get("firstName", "") + " " + player.get("familyName", ""))
+        return {
+            "name": _leader_name(name),
+            "val": player.get("statistics", {}).get(stat_key, 0),
+        }
+
+    return {
+        "pts": _leader(pts_leader, "points"),
+        "reb": _leader(reb_leader, "reboundsTotal"),
+        "ast": _leader(ast_leader, "assists"),
+    }
+
+
+def _transform_game(sb_game, boxscore_data=None):
+    """Transform a single game from nba_api scoreboard + boxscore → frontend MOCK_GAMES format."""
+    game_status = sb_game.get("gameStatus", 1)
+    period = sb_game.get("period", 0)
+    game_clock = _parse_game_clock(sb_game.get("gameClock", ""))
+
+    away_team = sb_game.get("awayTeam", {})
+    home_team = sb_game.get("homeTeam", {})
+
+    # Quarter scores from scoreboard
+    away_quarters = _build_quarters(away_team.get("periods", []))
+    home_quarters = _build_quarters(home_team.get("periods", []))
+
+    # Build team sides
+    def build_side(team, box_team, leaders_sb):
+        side = {
+            "abbr": team.get("teamTricode", ""),
+            "city": team.get("teamCity", "").upper(),
+            "name": team.get("teamName", ""),
+            "record": _format_record(team.get("wins", 0), team.get("losses", 0)),
+            "score": team.get("score", 0),
+        }
+
+        # Leaders: prefer boxscore (per-stat leader) over scoreboard (single leader for all)
+        if box_team and box_team.get("players"):
+            side["leaders"] = _leaders_from_boxscore_players(box_team["players"])
+        elif leaders_sb:
+            side["leaders"] = _leaders_from_scoreboard(leaders_sb)
+        else:
+            side["leaders"] = {
+                "pts": {"name": "—", "val": 0},
+                "reb": {"name": "—", "val": 0},
+                "ast": {"name": "—", "val": 0},
+            }
+
+        # Stats and boxscore: from boxscore data if available
+        if box_team:
+            side["stats"] = _team_stats_from_boxscore(box_team)
+            side["boxscore"] = _transform_team_boxscore(box_team)
+        else:
+            side["stats"] = {"fgPct": "0.0", "threePct": "0.0", "ftPct": "0.0", "reb": 0, "ast": 0, "stl": 0, "blk": 0, "to": 0}
+            side["boxscore"] = {"starters": [], "bench": []}
+
+        return side
+
+    # Boxscore team data
+    box_away = boxscore_data.get("awayTeam", {}) if boxscore_data else None
+    box_home = boxscore_data.get("homeTeam", {}) if boxscore_data else None
+
+    # Scoreboard leaders
+    game_leaders = sb_game.get("gameLeaders", {})
+    away_leaders = game_leaders.get("awayLeaders", {})
+    home_leaders = game_leaders.get("homeLeaders", {})
+
+    # Arena/venue
+    arena = ""
+    if boxscore_data and boxscore_data.get("arena"):
+        a = boxscore_data["arena"]
+        arena = f"{a.get('arenaName', '')}, {a.get('arenaCity', '')}"
+    elif sb_game.get("arenaName"):
+        arena = f"{sb_game.get('arenaName', '')}, {sb_game.get('arenaCity', '')}"
+
+    # Status text for scheduled games (e.g. "7:00 pm ET")
+    status_text = sb_game.get("gameStatusText", "").strip()
+
+    return {
+        "id": sb_game.get("gameId", ""),
+        "status": _game_status_str(game_status),
+        "period": _period_label(period, game_status),
+        "periodNum": period,
+        "clock": game_clock if game_status == 2 else ("" if game_status == 3 else status_text),
+        "venue": arena,
+        "quarters": {
+            "away": away_quarters,
+            "home": home_quarters,
+        },
+        "away": build_side(away_team, box_away, away_leaders),
+        "home": build_side(home_team, box_home, home_leaders),
+    }
+
+
+def fetch_scores():
+    """Fetch today's NBA scores from nba.com CDN with boxscore details."""
+    global last_good_scores, scores_cache
+
+    if "scores" in scores_cache:
+        return scores_cache["scores"]
+
+    log.info("Fetching NBA scores from cdn.nba.com...")
+
+    try:
+        resp = requests.get(config.SCORES_SCOREBOARD_URL, headers=_NBA_HEADERS, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        log.warning(f"Scoreboard fetch failed: {e}")
+        return last_good_scores
+
+    sb = data.get("scoreboard", {})
+    games_raw = sb.get("games", [])
+
+    if not games_raw:
+        log.info("No NBA games today")
+        scores_cache["scores"] = []
+        last_good_scores = []
+        return []
+
+    log.info(f"Found {len(games_raw)} games today, fetching boxscores...")
+
+    # Fetch boxscores in parallel for live/final games
+    boxscores = {}
+    games_needing_box = [
+        g for g in games_raw
+        if g.get("gameStatus", 1) >= 2  # live or final
+    ]
+
+    if games_needing_box:
+        with ThreadPoolExecutor(max_workers=min(len(games_needing_box), 10)) as executor:
+            future_to_id = {
+                executor.submit(_fetch_boxscore, g["gameId"]): g["gameId"]
+                for g in games_needing_box
+            }
+            for future in as_completed(future_to_id):
+                gid = future_to_id[future]
+                try:
+                    result = future.result()
+                    if result:
+                        boxscores[gid] = result
+                except Exception as e:
+                    log.debug(f"Boxscore worker error for {gid}: {e}")
+
+    log.info(f"Fetched {len(boxscores)}/{len(games_needing_box)} boxscores")
+
+    # Transform all games
+    games = []
+    for g in games_raw:
+        gid = g.get("gameId", "")
+        box = boxscores.get(gid)
+        games.append(_transform_game(g, box))
+
+    # Determine cache TTL: shorter if any games are live
+    has_live = any(g["status"] == "live" for g in games)
+    ttl = config.SCORES_CACHE_TTL_LIVE if has_live else config.SCORES_CACHE_TTL_FINAL
+    scores_cache = TTLCache(maxsize=1, ttl=ttl)
+    scores_cache["scores"] = games
+    last_good_scores = games
+
+    live_count = sum(1 for g in games if g["status"] == "live")
+    final_count = sum(1 for g in games if g["status"] == "final")
+    sched_count = sum(1 for g in games if g["status"] == "scheduled")
+    log.info(
+        f"Cached {len(games)} NBA games "
+        f"(live: {live_count}, final: {final_count}, scheduled: {sched_count}, "
+        f"cache TTL: {ttl}s)"
+    )
+
+    return games
+
+
+# ═══════════════════════════════════════
 # API ROUTES
 # ═══════════════════════════════════════
 
@@ -420,6 +775,18 @@ def api_headlines():
     return jsonify({"headlines": headlines, "count": len(headlines)})
 
 
+@app.route("/api/scores")
+def api_scores():
+    """Return today's NBA game scores with full boxscore data."""
+    games = fetch_scores()
+    has_live = any(g["status"] == "live" for g in games)
+    return jsonify({
+        "games": games,
+        "count": len(games),
+        "hasLive": has_live,
+    })
+
+
 @app.route("/api/status")
 def api_status():
     """Health check — returns status of all data sources."""
@@ -434,6 +801,10 @@ def api_status():
             "headlines": {
                 "cached": "headlines" in headlines_cache,
                 "last_count": len(last_good_headlines),
+            },
+            "scores": {
+                "cached": "scores" in scores_cache,
+                "last_count": len(last_good_scores),
             },
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -461,6 +832,11 @@ def _prewarm_caches():
     except Exception as e:
         log.warning(f"Pre-warm Bluesky failed: {e}")
 
+    try:
+        fetch_scores()
+    except Exception as e:
+        log.warning(f"Pre-warm scores failed: {e}")
+
     log.info("Cache pre-warm complete")
 
 
@@ -474,6 +850,7 @@ if __name__ == "__main__":
     log.info(f"Bluesky accounts: {len(config.BLUESKY_ACCOUNTS)}")
     log.info(f"Headlines source: RSS → {config.HEADLINES_RSS_URL}")
     log.info(f"Headlines fallback: HTML → {config.HEADLINES_URL}")
+    log.info(f"Scores source: {config.SCORES_SCOREBOARD_URL}")
     log.info(f"Server: http://localhost:{config.SERVER_PORT}")
     log.info("=" * 50)
 

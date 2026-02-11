@@ -267,94 +267,106 @@ def _fetch_headlines_rss():
 
 
 def _fetch_headlines_html():
-    """Scrape headlines from HoopsHype HTML page (fallback strategy)."""
+    """Scrape headlines from HoopsHype HTML page (fallback strategy).
+
+    HoopsHype is on Gannett's Presto CMS (USA TODAY Network) which uses
+    gnt-* prefixed CSS classes. We try multiple strategies in order of
+    specificity, falling back to broader link-based extraction.
+    """
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
         }
-        resp = requests.get(config.HEADLINES_URL, headers=headers, timeout=15)
-        resp.raise_for_status()
 
-        soup = BeautifulSoup(resp.text, "lxml")
         items = []
+        seen_texts = set()
 
-        # Try multiple CSS selector strategies for Gannett/WordPress layouts
-        selectors = [
-            "article",
-            "div.gnt-story-hp",           # Gannett CMS story cards
-            "a.gnt-story-hp__headline",   # Gannett headline links
-            "div.post-loop-item",
-            "div.entry-content li",
-        ]
-
-        articles = []
-        for sel in selectors:
-            articles = soup.select(sel)
-            if articles:
-                log.debug(f"HTML scraper matched selector: {sel} ({len(articles)} elements)")
-                break
-
-        for article in articles:
-            title_el = (
-                article.select_one("h2 a") or
-                article.select_one("h3 a") or
-                article.select_one("a.gnt-story-hp__headline") or
-                article.select_one("h2") or
-                article.select_one("h3") or
-                article.select_one("a[class*='title']") or
-                article.select_one("a[class*='headline']")
-            )
-
-            # If the matched element itself is an <a> with headline text, use it
-            if not title_el and article.name == "a":
-                title_el = article
-
-            if not title_el:
-                continue
-
-            text = title_el.get_text(strip=True)
-            if not text or len(text) < 15:
-                continue
-
-            if any(it["text"] == text for it in items):
-                continue
-
-            time_el = (
-                article.select_one("time[datetime]") or
-                article.select_one("time") or
-                article.select_one("[class*='date']") or
-                article.select_one("[data-date]")
-            )
-
-            time_str = ""
-            is_new = False
-
-            if time_el:
-                dt_attr = time_el.get("datetime") or time_el.get("data-date", "")
-                if dt_attr:
-                    is_new = _is_recent(dt_attr, config.HEADLINES_NEW_THRESHOLD_MINUTES)
-                    time_str = _time_ago(dt_attr) or time_el.get_text(strip=True)
-                else:
-                    time_str = time_el.get_text(strip=True)
-
+        def _add_item(text, time_str="", is_new=False):
+            """Add a headline if it's unique and long enough."""
+            text = text.strip()
+            if not text or len(text) < 20:
+                return False
+            # Deduplicate by normalized text
+            norm = text.lower()
+            if norm in seen_texts:
+                return False
+            seen_texts.add(norm)
             items.append({"text": text, "time": time_str, "isNew": is_new})
+            return True
+
+        # Try both the rumors page and main page for more headlines
+        urls_to_try = [config.HEADLINES_URL, "https://hoopshype.com/"]
+
+        for page_url in urls_to_try:
             if len(items) >= config.HEADLINES_MAX_ITEMS:
                 break
 
-        # Last resort: find any rumor links
-        if not items:
-            for link in soup.select("a[href*='/rumors/'], a[href*='/rumor/'], a[href*='/story/']"):
-                text = link.get_text(strip=True)
-                if text and len(text) >= 25 and not any(it["text"] == text for it in items):
-                    items.append({"text": text, "time": "", "isNew": False})
+            try:
+                resp = requests.get(page_url, headers=headers, timeout=15)
+                resp.raise_for_status()
+            except Exception as e:
+                log.warning(f"HTML fetch failed for {page_url}: {e}")
+                continue
+
+            soup = BeautifulSoup(resp.text, "lxml")
+
+            # Strategy 1: Gannett CMS article elements with gnt-* classes
+            for el in soup.select("[class*='gnt-'] a, a[class*='gnt-']"):
+                text = el.get_text(strip=True)
+                _add_item(text)
+                if len(items) >= config.HEADLINES_MAX_ITEMS:
+                    break
+
+            if len(items) >= config.HEADLINES_MAX_ITEMS:
+                break
+
+            # Strategy 2: Article/section headline elements
+            for sel in ["article h2 a", "article h3 a", "article h2", "article h3",
+                        "section h2 a", "section h3 a",
+                        "h2 a[href*='/story/']", "h3 a[href*='/story/']",
+                        "h2 a[href*='/rumors/']", "h3 a[href*='/rumors/']"]:
+                for el in soup.select(sel):
+                    text = el.get_text(strip=True)
+                    # Try to find a time element nearby
+                    time_str = ""
+                    is_new = False
+                    parent = el.find_parent(["article", "section", "div"])
+                    if parent:
+                        time_el = parent.select_one("time[datetime]") or parent.select_one("[data-date]")
+                        if time_el:
+                            dt_attr = time_el.get("datetime") or time_el.get("data-date", "")
+                            if dt_attr:
+                                is_new = _is_recent(dt_attr, config.HEADLINES_NEW_THRESHOLD_MINUTES)
+                                time_str = _time_ago(dt_attr)
+                    _add_item(text, time_str, is_new)
                     if len(items) >= config.HEADLINES_MAX_ITEMS:
                         break
+                if len(items) >= config.HEADLINES_MAX_ITEMS:
+                    break
+
+            if len(items) >= config.HEADLINES_MAX_ITEMS:
+                break
+
+            # Strategy 3: All links to /story/ or /rumors/ pages (Gannett URL pattern)
+            for link in soup.select("a[href]"):
+                href = link.get("href", "")
+                if not any(p in href for p in ["/story/sports/nba/", "/rumors/", "/rumor/"]):
+                    continue
+                # Skip nav/footer/social links
+                if any(skip in href for skip in ["facebook.com", "twitter.com", "#", "javascript:"]):
+                    continue
+                text = link.get_text(strip=True)
+                _add_item(text)
+                if len(items) >= config.HEADLINES_MAX_ITEMS:
+                    break
 
         if items:
-            log.info(f"Fetched {len(items)} headlines via HTML scraping")
+            log.info(f"Fetched {len(items)} headlines via HTML scraping from {len(urls_to_try)} pages")
         else:
-            log.warning("HTML scraper found no headlines — selectors may need updating")
+            log.warning("HTML scraper found no headlines — site structure may have changed")
 
         return items if items else None
 

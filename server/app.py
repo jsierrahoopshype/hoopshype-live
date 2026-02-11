@@ -142,7 +142,12 @@ def fetch_bluesky_posts():
     if all_posts:
         last_good_bluesky = all_posts
         bluesky_cache["posts"] = all_posts
-        log.info(f"Cached {len(all_posts)} Bluesky posts (newest: {all_posts[0].get('author', '?')})")
+        with_avatar = sum(1 for p in all_posts if p.get("avatarUrl"))
+        log.info(
+            f"Cached {len(all_posts)} Bluesky posts "
+            f"({with_avatar}/{len(all_posts)} have profile photos, "
+            f"newest: {all_posts[0].get('author', '?')})"
+        )
     else:
         log.warning("No Bluesky posts fetched — check network or API endpoint")
 
@@ -182,18 +187,33 @@ def _initials(name):
 # ═══════════════════════════════════════
 
 def _fetch_headlines_rss():
-    """Fetch headlines from HoopsHype RSS feed (primary strategy)."""
+    """Fetch headlines from HoopsHype RSS feed (primary strategy).
+
+    Tries the rumors-specific feed first, then the main site feed.
+    WordPress always exposes RSS at /feed/ — no auto-discovery needed.
+    """
     rss_urls = [
-        config.HEADLINES_RSS_URL,          # rumors-specific feed
-        config.HEADLINES_RSS_FALLBACK_URL,  # main site feed
+        config.HEADLINES_RSS_URL,          # https://hoopshype.com/rumors/feed/
+        config.HEADLINES_RSS_FALLBACK_URL,  # https://hoopshype.com/feed/
     ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
 
     for rss_url in rss_urls:
+        log.info(f"Trying RSS feed: {rss_url}")
         try:
-            resp = requests.get(rss_url, headers=_HTTP_HEADERS, timeout=15)
+            resp = requests.get(rss_url, headers=headers, timeout=15)
             resp.raise_for_status()
 
-            root = ET.fromstring(resp.content)
+            # Sanity check: RSS/XML should not start with <!DOCTYPE html
+            content = resp.content
+            if content.lstrip()[:20].lower().startswith(b"<!doctype"):
+                log.warning(f"RSS URL returned HTML instead of XML: {rss_url}")
+                continue
+
+            root = ET.fromstring(content)
             items = []
 
             for item_el in root.iter("item"):
@@ -231,9 +251,13 @@ def _fetch_headlines_rss():
             if items:
                 log.info(f"Fetched {len(items)} headlines via RSS from {rss_url}")
                 return items
+            else:
+                log.warning(f"RSS feed parsed but contained no usable items: {rss_url}")
 
+        except ET.ParseError as e:
+            log.warning(f"RSS XML parse error for {rss_url}: {e}")
         except Exception as e:
-            log.debug(f"RSS fetch failed for {rss_url}: {e}")
+            log.warning(f"RSS fetch failed for {rss_url}: {e}")
 
     return None  # signal to try HTML fallback
 

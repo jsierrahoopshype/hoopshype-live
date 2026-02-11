@@ -196,7 +196,9 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .feed-post{background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:var(--sp-3) var(--sp-4);animation:postSlideIn 0.4s ease-out;flex-shrink:0}
 @keyframes postSlideIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}
 .post-header{display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-2)}
-.post-avatar{width:28px;height:28px;border-radius:50%;background:var(--bg-surface);border:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:700;font-size:10px;color:var(--accent);flex-shrink:0;object-fit:cover}
+.post-avatar-wrap{width:28px;height:28px;flex-shrink:0}
+.post-avatar{width:28px;height:28px;border-radius:50%;background:var(--bg-surface);border:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:700;font-size:10px;color:var(--accent);flex-shrink:0}
+.post-avatar-img{width:28px;height:28px;border-radius:50%;border:1px solid var(--border-subtle);object-fit:cover;display:block}
 .post-meta{flex:1;min-width:0}
 .post-author{font-family:var(--font-display);font-weight:600;font-size:13px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .post-handle{font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary)}
@@ -524,7 +526,13 @@ function renderTicker(headlines){
 }
 
 function renderFeed(posts){
-  document.getElementById('feedContainer').innerHTML=posts.map((p,i)=>`<div class="feed-post" style="animation-delay:${i*0.05}s"><div class="post-header">${p.avatarUrl?`<img class="post-avatar" src="${p.avatarUrl}" alt="" onerror="this.outerHTML='<div class=\\'post-avatar\\'>${p.avatar}</div>'">`:`<div class="post-avatar">${p.avatar}</div>`}<div class="post-meta"><div class="post-author">${p.author}</div><div class="post-handle">${p.handle}</div></div><div class="post-time">${p.time}</div></div><div class="post-text">${p.text}</div></div>`).join('');
+  document.getElementById('feedContainer').innerHTML=posts.map((p,i)=>{
+    const fb=`<div class="post-avatar">${p.avatar}</div>`;
+    const av=p.avatarUrl
+      ?`<img class="post-avatar-img" src="${p.avatarUrl}" alt="" width="28" height="28" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`
+      :fb;
+    return `<div class="feed-post" style="animation-delay:${i*0.05}s"><div class="post-header"><div class="post-avatar-wrap" data-fb="${fb.replace(/"/g,'&quot;')}">${av}</div><div class="post-meta"><div class="post-author">${p.author}</div><div class="post-handle">${p.handle}</div></div><div class="post-time">${p.time}</div></div><div class="post-text">${p.text}</div></div>`;
+  }).join('');
 }
 
 let currentRankingIndex=0;

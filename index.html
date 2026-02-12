@@ -145,9 +145,10 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .bs-table tfoot .pct{font-size:10px;color:var(--accent);font-weight:600;display:block;margin-top:1px}
 
 /* Mini scores */
-.mini-scores{display:flex;gap:var(--sp-3);padding:var(--sp-2) 0;overflow:hidden;flex-shrink:0}
+.mini-scores{padding:var(--sp-2) 0;overflow:hidden;flex-shrink:0;position:relative}
 .mini-scores.hidden{display:none}
-.mini-game{flex:0 0 auto;display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2) var(--sp-4);background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-md);min-width:190px;transition:border-color 0.2s}
+.mini-scores-track{display:flex;gap:var(--sp-3);transition:transform 0.5s ease}
+.mini-game{flex:0 0 auto;display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2) var(--sp-4);background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-md);min-width:190px;transition:border-color 0.3s,background 0.3s}
 .mini-game.active{border-color:var(--accent);background:var(--bg-panel-alt)}
 .mini-teams{display:flex;flex-direction:column;gap:2px}
 .mini-team-row{display:flex;align-items:center;gap:var(--sp-2)}
@@ -162,7 +163,9 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .rankings-mode.active{display:flex}
 .next-games-bar{background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:var(--sp-3) var(--sp-5);display:flex;align-items:center;gap:var(--sp-6);flex-shrink:0}
 .next-games-label{font-family:var(--font-display);font-weight:600;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);white-space:nowrap}
-.next-games-list{display:flex;gap:var(--sp-4);overflow-x:auto;flex:1}
+.next-games-list{display:flex;gap:var(--sp-4);overflow:hidden;flex:1;position:relative}
+.next-games-page{display:flex;gap:var(--sp-4);position:absolute;left:0;top:0;width:100%;opacity:0;transform:translateY(8px);transition:opacity 0.4s ease,transform 0.4s ease;pointer-events:none}
+.next-games-page.active{position:relative;opacity:1;transform:translateY(0);pointer-events:auto}
 .next-game-item{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-1) var(--sp-3);background:var(--bg-surface);border-radius:var(--radius-sm);white-space:nowrap;font-size:13px}
 .next-game-teams{font-family:var(--font-display);font-weight:600}
 .next-game-time{font-family:var(--font-mono);font-size:12px;color:var(--text-tertiary)}
@@ -203,7 +206,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .post-author{font-family:var(--font-display);font-weight:600;font-size:13px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .post-handle{font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary)}
 .post-time{font-family:var(--font-mono);font-size:10px;color:var(--text-muted);flex-shrink:0}
-.post-text{font-family:var(--font-body);font-size:13.5px;line-height:1.45;color:var(--text-primary);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.post-text{font-family:var(--font-body);font-size:13.5px;line-height:1.45;color:var(--text-primary)}
 
 /* ═══ TICKER ═══ */
 .ticker-area{grid-area:ticker;display:flex;align-items:center;background:var(--bg-panel);border-top:1px solid var(--border-subtle);overflow:hidden;position:relative}
@@ -243,7 +246,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
       </div>
       <div class="screen-dots" id="screenDots"><div class="screen-dot active"></div><div class="screen-dot"></div><div class="screen-dot"></div></div>
     </div>
-    <div class="mini-scores" id="miniScores"></div>
+    <div class="mini-scores" id="miniScores"><div class="mini-scores-track" id="miniScoresTrack"></div></div>
     <div class="rankings-mode" id="rankingsMode">
       <div class="next-games-bar"><div class="next-games-label">▶ NEXT GAMES</div><div class="next-games-list" id="nextGamesList"></div></div>
       <div class="rankings-panel" id="rankingsPanel"></div>
@@ -267,7 +270,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 </div>
 
 <script>
-const CONFIG={gameRotateInterval:20000,screenRotateInterval:8000,rankingsRotateInterval:15000,tickerSpeed:50,autoModeHoursAfterLastGame:6};
+const CONFIG={gameRotateInterval:20000,screenDurations:[9000,15000,15000],rankingsRotateInterval:15000,tickerSpeed:50,autoModeHoursAfterLastGame:6,miniScoresVisible:5};
 
 const MOCK_GAMES=[
   {id:'1',status:'live',period:'3RD QTR',periodNum:3,clock:'4:32',venue:'TD Garden, Boston',
@@ -490,8 +493,9 @@ function renderGameScreens(g){
   document.getElementById('screen3').innerHTML=renderBoxscore(g,'home');
 }
 
-// ═══ SCREEN ROTATION ═══
+// ═══ SCREEN ROTATION (per-screen timing) ═══
 let currentScreen=0;
+let screenTimer=null;
 const SCREENS=['screen1','screen2','screen3'];
 function rotateScreen(){
   const prev=currentScreen;currentScreen=(currentScreen+1)%3;
@@ -500,6 +504,13 @@ function rotateScreen(){
   setTimeout(()=>prevEl.classList.remove('exit-left'),500);
   document.getElementById(SCREENS[currentScreen]).classList.add('active');
   document.querySelectorAll('#screenDots .screen-dot').forEach((d,i)=>d.classList.toggle('active',i===currentScreen));
+  scheduleNextScreen();
+}
+function scheduleNextScreen(){
+  if(screenTimer)clearTimeout(screenTimer);
+  // Duration for the CURRENT screen (how long it stays visible)
+  const dur=CONFIG.screenDurations[currentScreen]||9000;
+  screenTimer=setTimeout(rotateScreen,dur);
 }
 
 let currentGameIndex=0;
@@ -515,10 +526,25 @@ function rotateGame(){
   document.querySelectorAll('#screenDots .screen-dot').forEach((d,i)=>d.classList.toggle('active',i===0));
   renderGameScreens(pool[currentGameIndex]);
   renderMiniScores(allGames,pool[currentGameIndex].id);
+  scheduleNextScreen(); // reset screen timer for screen 1 duration
 }
 
 function renderMiniScores(games,activeId){
-  document.getElementById('miniScores').innerHTML=games.map(g=>`<div class="mini-game ${g.id===activeId?'active':''}"><div class="mini-period ${g.status==='final'?'final':''}">${g.status==='final'?'FINAL':g.clock}</div><div class="mini-teams"><div class="mini-team-row"><span class="mini-team-abbr">${g.away.abbr}</span><span class="mini-score ${g.away.score>g.home.score?'leading':''}">${g.away.score}</span></div><div class="mini-team-row"><span class="mini-team-abbr">${g.home.abbr}</span><span class="mini-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div></div></div>`).join('');
+  const track=document.getElementById('miniScoresTrack');
+  track.innerHTML=games.map(g=>`<div class="mini-game ${g.id===activeId?'active':''}" data-gid="${g.id}"><div class="mini-period ${g.status==='final'?'final':''}">${g.status==='final'?'FINAL':(g.status==='scheduled'?g.clock||'—':g.clock)}</div><div class="mini-teams"><div class="mini-team-row"><span class="mini-team-abbr">${g.away.abbr}</span><span class="mini-score ${g.away.score>g.home.score?'leading':''}">${g.away.score}</span></div><div class="mini-team-row"><span class="mini-team-abbr">${g.home.abbr}</span><span class="mini-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div></div></div>`).join('');
+  // Scroll track so active game is centered
+  requestAnimationFrame(()=>{
+    const container=document.getElementById('miniScores');
+    const activeEl=track.querySelector('.mini-game.active');
+    if(!activeEl||games.length<=CONFIG.miniScoresVisible)return track.style.transform='translateX(0)';
+    const containerW=container.offsetWidth;
+    const elLeft=activeEl.offsetLeft;
+    const elW=activeEl.offsetWidth;
+    const targetX=elLeft-(containerW/2)+(elW/2);
+    const maxScroll=track.scrollWidth-containerW;
+    const clampedX=Math.max(0,Math.min(targetX,maxScroll));
+    track.style.transform=`translateX(-${clampedX}px)`;
+  });
 }
 
 function renderTicker(headlines){
@@ -534,18 +560,57 @@ function renderFeed(posts){
     const av=p.avatarUrl
       ?`<img class="post-avatar-img" src="${p.avatarUrl}" alt="" width="28" height="28" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`
       :fb;
-    return `<div class="feed-post" style="animation-delay:${i*0.05}s"><div class="post-header"><div class="post-avatar-wrap" data-fb="${fb.replace(/"/g,'&quot;')}">${av}</div><div class="post-meta"><div class="post-author">${p.author}</div><div class="post-handle">${p.handle}</div></div><div class="post-time">${p.time}</div></div><div class="post-text">${p.text}</div></div>`;
+    const txt=p.text.length>280?p.text.slice(0,277)+'...':p.text;
+    return `<div class="feed-post" style="animation-delay:${i*0.05}s"><div class="post-header"><div class="post-avatar-wrap" data-fb="${fb.replace(/"/g,'&quot;')}">${av}</div><div class="post-meta"><div class="post-author">${p.author}</div><div class="post-handle">${p.handle}</div></div><div class="post-time">${p.time}</div></div><div class="post-text">${txt}</div></div>`;
   }).join('');
 }
 
 let currentRankingIndex=0;
 function renderRankings(r){const p=document.getElementById('rankingsPanel');p.style.animation='none';p.offsetHeight;p.style.animation='';const dots=MOCK_RANKINGS.map((_,i)=>`<div class="rankings-progress-dot ${i===currentRankingIndex?'active':''}"></div>`).join('');p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div><table class="rankings-table"><thead><tr>${r.columns.map(c=>`<th>${c}</th>`).join('')}</tr></thead><tbody>${r.data.map(row=>`<tr><td><span class="rank-num ${row[0]<=3?'top-3':''}">${row[0]}</span></td><td><span class="rank-player">${row[1]}</span><span class="rank-team">${row[2]}</span></td><td></td><td><span class="rank-value">${row[3]}</span></td></tr>`).join('')}</tbody></table>`;}
-function renderNextGames(games){document.getElementById('nextGamesList').innerHTML=games.map(g=>`<div class="next-game-item"><span class="next-game-teams">${g.away} @ ${g.home}</span><span class="next-game-time">${g.time}</span></div>`).join('');}
+let nextGamesPages=[];let currentNextGamesPage=0;
+function renderNextGames(games){
+  const perPage=5;
+  nextGamesPages=[];
+  for(let i=0;i<games.length;i+=perPage){nextGamesPages.push(games.slice(i,i+perPage));}
+  if(nextGamesPages.length===0)nextGamesPages=[[]];
+  currentNextGamesPage=0;
+  _showNextGamesPage();
+}
+function _showNextGamesPage(){
+  const container=document.getElementById('nextGamesList');
+  const page=nextGamesPages[currentNextGamesPage]||[];
+  container.innerHTML=nextGamesPages.map((pg,pi)=>`<div class="next-games-page${pi===currentNextGamesPage?' active':''}">${pg.map(g=>`<div class="next-game-item"><span class="next-game-teams">${g.away} @ ${g.home}</span><span class="next-game-time">${g.time}</span></div>`).join('')}</div>`).join('');
+}
+function rotateNextGames(){if(nextGamesPages.length<=1)return;currentNextGamesPage=(currentNextGamesPage+1)%nextGamesPages.length;_showNextGamesPage();}
 function rotateRankings(){currentRankingIndex=(currentRankingIndex+1)%MOCK_RANKINGS.length;renderRankings(MOCK_RANKINGS[currentRankingIndex]);}
 
 let currentMode=null;
 function setMode(mode){if(mode===currentMode)return;currentMode=mode;const fg=document.getElementById('featuredGame'),ms=document.getElementById('miniScores'),rm=document.getElementById('rankingsMode'),lb=document.getElementById('liveBadge');if(mode==='live'){fg.classList.remove('hidden');ms.classList.remove('hidden');rm.classList.remove('active');lb.style.display='flex';}else{fg.classList.add('hidden');ms.classList.add('hidden');rm.classList.add('active');lb.style.display='none';const scheduled=getGames().filter(g=>g.status==='scheduled');if(scheduled.length>0){renderNextGames(scheduled.map(g=>({away:g.away.abbr,home:g.home.abbr,time:g.clock||'TBD'})));}else{renderNextGames(MOCK_NEXT_GAMES);}renderRankings(MOCK_RANKINGS[currentRankingIndex]);}}
-function determineAutoMode(games){if(!games||games.length===0)return'rankings';if(games.some(g=>g.status==='live'))return'live';if(games.some(g=>g.status==='final'))return'live';return'rankings';}
+// LIVE mode: from first tip-off until 6h after last game ends
+// Fallback: if all games scheduled, stay in rankings until first goes live
+// If all games final, stay live for 6 hours after (estimated via scheduled start + 8.5h)
+let lastFinalSeenAt=null; // timestamp when we first saw all games final
+function determineAutoMode(games){
+  if(!games||games.length===0)return'rankings';
+  // Any game currently live → LIVE mode
+  if(games.some(g=>g.status==='live')){lastFinalSeenAt=null;return'live';}
+  // Any final games exist
+  const finals=games.filter(g=>g.status==='final');
+  if(finals.length>0){
+    // Track when all games became final
+    const allDone=games.every(g=>g.status==='final'||g.status==='scheduled');
+    const anyPlayed=finals.length>0;
+    if(anyPlayed){
+      if(!lastFinalSeenAt)lastFinalSeenAt=Date.now();
+      const hoursSinceFinal=(Date.now()-lastFinalSeenAt)/3600000;
+      // Stay LIVE for 6 hours after last game ended
+      if(hoursSinceFinal<6)return'live';
+      return'rankings';
+    }
+  }
+  // All scheduled, no live/final → rankings (waiting for tip-off)
+  return'rankings';
+}
 
 function simulateScoreUpdate(){if(liveGames)return;MOCK_GAMES.forEach(g=>{if(g.status==='live'){if(Math.random()>0.5){const side=Math.random()>0.5?'home':'away';g[side].score+=Math.random()>0.7?3:2;}let[m,s]=g.clock.split(':').map(Number);s-=Math.floor(Math.random()*20)+5;if(s<0){m--;s+=60;}if(m<0)m=11;g.clock=`${m}:${s.toString().padStart(2,'0')}`;}});if(currentMode==='live'){const pool=MOCK_GAMES.filter(g=>g.status==='live');if(pool.length>0){const idx=currentGameIndex%pool.length;renderGameScreens(pool[idx]);renderMiniScores(MOCK_GAMES,pool[idx].id);}}}
 
@@ -623,11 +688,12 @@ function init(){
   // Show mock data immediately as fallback
   renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);
   setMode(determineAutoMode(MOCK_GAMES));
-  setInterval(rotateScreen,CONFIG.screenRotateInterval);
+  scheduleNextScreen(); // kick off per-screen timer (screen 1 → 9s, screen 2/3 → 15s)
   setInterval(rotateGame,CONFIG.gameRotateInterval);
   setInterval(rotateRankings,CONFIG.rankingsRotateInterval);
+  setInterval(rotateNextGames,8000);
   setInterval(simulateScoreUpdate,5000);
-  setInterval(()=>setMode(determineAutoMode(getGames())),60000);
+  setInterval(()=>setMode(determineAutoMode(getGames())),30000);
   document.addEventListener('keydown',e=>{if(e.key==='1')setMode('live');if(e.key==='2')setMode('rankings');});
   // Start live API polling — fetch immediately, then on interval
   pollBluesky();pollHeadlines();pollScores();

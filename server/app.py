@@ -2,25 +2,24 @@
 HoopsHype Live — Flask Server
 Serves the broadcast page and API endpoints for live data.
 
-Phase 1: Bluesky feed + HoopsHype headlines
+Phase 1: Bluesky feed + HoopsHype headlines (via Google Sheets)
 Phase 2: Live NBA scores via nba.com CDN
 Phase 3: Google Sheets rankings (TODO)
 """
 
+import csv
+import io
 import logging
 import os
 import re
 import threading
-import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 import requests
-from bs4 import BeautifulSoup
 from cachetools import TTLCache
 
 import config
@@ -187,229 +186,66 @@ def _initials(name):
 
 
 # ═══════════════════════════════════════
-# HOOPSHYPE HEADLINES
+# HOOPSHYPE HEADLINES (Google Sheets)
 # ═══════════════════════════════════════
 
-def _fetch_headlines_rss():
-    """Fetch headlines from HoopsHype RSS feed (primary strategy).
-
-    Tries the rumors-specific feed first, then the main site feed.
-    WordPress always exposes RSS at /feed/ — no auto-discovery needed.
-    """
-    rss_urls = [
-        config.HEADLINES_RSS_URL,          # https://hoopshype.com/rumors/feed/
-        config.HEADLINES_RSS_FALLBACK_URL,  # https://hoopshype.com/feed/
-    ]
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    }
-
-    for rss_url in rss_urls:
-        log.info(f"Trying RSS feed: {rss_url}")
-        try:
-            resp = requests.get(rss_url, headers=headers, timeout=15)
-            resp.raise_for_status()
-
-            # Sanity check: RSS/XML should not start with <!DOCTYPE html
-            content = resp.content
-            if content.lstrip()[:20].lower().startswith(b"<!doctype"):
-                log.warning(f"RSS URL returned HTML instead of XML: {rss_url}")
-                continue
-
-            root = ET.fromstring(content)
-            items = []
-
-            for item_el in root.iter("item"):
-                title = (item_el.findtext("title") or "").strip()
-                if not title or len(title) < 10:
-                    continue
-
-                # Deduplicate
-                if any(it["text"] == title for it in items):
-                    continue
-
-                # Parse pubDate (RFC 822 format: "Mon, 10 Feb 2025 12:34:56 +0000")
-                pub_date = (item_el.findtext("pubDate") or "").strip()
-                time_str = ""
-                is_new = False
-
-                if pub_date:
-                    try:
-                        dt = parsedate_to_datetime(pub_date)
-                        iso_str = dt.isoformat()
-                        time_str = _time_ago(iso_str)
-                        is_new = _is_recent(iso_str, config.HEADLINES_NEW_THRESHOLD_MINUTES)
-                    except Exception:
-                        pass
-
-                items.append({
-                    "text": title,
-                    "time": time_str,
-                    "isNew": is_new,
-                })
-
-                if len(items) >= config.HEADLINES_MAX_ITEMS:
-                    break
-
-            if items:
-                log.info(f"Fetched {len(items)} headlines via RSS from {rss_url}")
-                return items
-            else:
-                log.warning(f"RSS feed parsed but contained no usable items: {rss_url}")
-
-        except ET.ParseError as e:
-            log.warning(f"RSS XML parse error for {rss_url}: {e}")
-        except Exception as e:
-            log.warning(f"RSS fetch failed for {rss_url}: {e}")
-
-    return None  # signal to try HTML fallback
-
-
-def _fetch_headlines_html():
-    """Scrape headlines from HoopsHype HTML page (fallback strategy).
-
-    HoopsHype is on Gannett's Presto CMS (USA TODAY Network) which uses
-    gnt-* prefixed CSS classes. We try multiple strategies in order of
-    specificity, falling back to broader link-based extraction.
-    """
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-
-        items = []
-        seen_texts = set()
-
-        def _add_item(text, time_str="", is_new=False):
-            """Add a headline if it's unique and long enough."""
-            text = text.strip()
-            if not text or len(text) < 20:
-                return False
-            # Deduplicate by normalized text
-            norm = text.lower()
-            if norm in seen_texts:
-                return False
-            seen_texts.add(norm)
-            items.append({"text": text, "time": time_str, "isNew": is_new})
-            return True
-
-        # Try both the rumors page and main page for more headlines
-        urls_to_try = [config.HEADLINES_URL, "https://hoopshype.com/"]
-
-        for page_url in urls_to_try:
-            if len(items) >= config.HEADLINES_MAX_ITEMS:
-                break
-
-            try:
-                resp = requests.get(page_url, headers=headers, timeout=15)
-                resp.raise_for_status()
-            except Exception as e:
-                log.warning(f"HTML fetch failed for {page_url}: {e}")
-                continue
-
-            soup = BeautifulSoup(resp.text, "lxml")
-
-            # Strategy 1: Gannett CMS article elements with gnt-* classes
-            for el in soup.select("[class*='gnt-'] a, a[class*='gnt-']"):
-                text = el.get_text(strip=True)
-                _add_item(text)
-                if len(items) >= config.HEADLINES_MAX_ITEMS:
-                    break
-
-            if len(items) >= config.HEADLINES_MAX_ITEMS:
-                break
-
-            # Strategy 2: Article/section headline elements
-            for sel in ["article h2 a", "article h3 a", "article h2", "article h3",
-                        "section h2 a", "section h3 a",
-                        "h2 a[href*='/story/']", "h3 a[href*='/story/']",
-                        "h2 a[href*='/rumors/']", "h3 a[href*='/rumors/']"]:
-                for el in soup.select(sel):
-                    text = el.get_text(strip=True)
-                    # Try to find a time element nearby
-                    time_str = ""
-                    is_new = False
-                    parent = el.find_parent(["article", "section", "div"])
-                    if parent:
-                        time_el = parent.select_one("time[datetime]") or parent.select_one("[data-date]")
-                        if time_el:
-                            dt_attr = time_el.get("datetime") or time_el.get("data-date", "")
-                            if dt_attr:
-                                is_new = _is_recent(dt_attr, config.HEADLINES_NEW_THRESHOLD_MINUTES)
-                                time_str = _time_ago(dt_attr)
-                    _add_item(text, time_str, is_new)
-                    if len(items) >= config.HEADLINES_MAX_ITEMS:
-                        break
-                if len(items) >= config.HEADLINES_MAX_ITEMS:
-                    break
-
-            if len(items) >= config.HEADLINES_MAX_ITEMS:
-                break
-
-            # Strategy 3: All links to /story/ or /rumors/ pages (Gannett URL pattern)
-            for link in soup.select("a[href]"):
-                href = link.get("href", "")
-                if not any(p in href for p in ["/story/sports/nba/", "/rumors/", "/rumor/"]):
-                    continue
-                # Skip nav/footer/social links
-                if any(skip in href for skip in ["facebook.com", "twitter.com", "#", "javascript:"]):
-                    continue
-                text = link.get_text(strip=True)
-                _add_item(text)
-                if len(items) >= config.HEADLINES_MAX_ITEMS:
-                    break
-
-        if items:
-            log.info(f"Fetched {len(items)} headlines via HTML scraping from {len(urls_to_try)} pages")
-        else:
-            log.warning("HTML scraper found no headlines — site structure may have changed")
-
-        return items if items else None
-
-    except Exception as e:
-        log.error(f"HTML headlines fetch failed: {e}")
-        return None
-
-
 def fetch_headlines():
-    """Fetch headlines from HoopsHype — tries RSS first, then HTML scraping."""
+    """Fetch headlines from a public Google Sheet (CSV export).
+
+    The sheet is the single source of truth for ticker headlines.
+    Column B contains headline text; first N rows get a NEW badge.
+    """
     global last_good_headlines
 
     if "headlines" in headlines_cache:
         return headlines_cache["headlines"]
 
-    log.info("Fetching HoopsHype headlines...")
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{config.HEADLINES_SHEET_ID}"
+        f"/export?format=csv&gid={config.HEADLINES_SHEET_GID}"
+    )
+    log.info(f"Fetching headlines from Google Sheet: {csv_url}")
 
-    # Strategy 1: RSS feed (reliable, structured data)
-    items = _fetch_headlines_rss()
+    try:
+        resp = requests.get(csv_url, timeout=15)
+        resp.raise_for_status()
+    except Exception as e:
+        log.warning(f"Google Sheets headlines fetch failed: {e}")
+        return last_good_headlines
 
-    # Strategy 2: HTML scraping (fallback for when RSS is unavailable)
-    if not items:
-        log.info("RSS unavailable, trying HTML scraper...")
-        items = _fetch_headlines_html()
+    # Parse CSV — column B is index 1 (0-indexed)
+    col_index = ord(config.HEADLINES_COLUMN.upper()) - ord("A")
+    reader = csv.reader(io.StringIO(resp.text))
+    items = []
+
+    for row_num, row in enumerate(reader):
+        if len(row) <= col_index:
+            continue
+        text = row[col_index].strip()
+        if not text:
+            continue
+        # Skip header row (first row if it looks like a label)
+        if row_num == 0 and text.lower() in ("headline", "headlines", "text", "title", "rumor", "rumors"):
+            continue
+
+        items.append({
+            "text": text,
+            "time": "",
+            "isNew": len(items) < config.HEADLINES_NEW_COUNT,
+        })
+
+        if len(items) >= config.HEADLINES_MAX_ITEMS:
+            break
 
     if items:
         last_good_headlines = items
         headlines_cache["headlines"] = items
+        new_count = sum(1 for h in items if h["isNew"])
+        log.info(f"Cached {len(items)} headlines from Google Sheet ({new_count} marked NEW)")
     else:
-        log.warning("No headlines from any source")
+        log.warning("Google Sheet returned no usable headlines")
 
     return last_good_headlines
-
-
-def _is_recent(iso_str, threshold_minutes):
-    """Check if a timestamp is within the threshold."""
-    try:
-        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        now = datetime.now(timezone.utc)
-        diff_minutes = (now - dt).total_seconds() / 60
-        return diff_minutes <= threshold_minutes
-    except Exception:
-        return False
 
 
 # ═══════════════════════════════════════
@@ -860,8 +696,7 @@ if __name__ == "__main__":
     log.info("=" * 50)
     log.info("HoopsHype Live — Starting server")
     log.info(f"Bluesky accounts: {len(config.BLUESKY_ACCOUNTS)}")
-    log.info(f"Headlines source: RSS → {config.HEADLINES_RSS_URL}")
-    log.info(f"Headlines fallback: HTML → {config.HEADLINES_URL}")
+    log.info(f"Headlines source: Google Sheet {config.HEADLINES_SHEET_ID} (col {config.HEADLINES_COLUMN})")
     log.info(f"Scores source: {config.SCORES_SCOREBOARD_URL}")
     log.info(f"Server: http://localhost:{config.SERVER_PORT}")
     log.info("=" * 50)

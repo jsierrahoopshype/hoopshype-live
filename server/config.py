@@ -384,16 +384,16 @@ BLUESKY_CACHE_TTL_SECONDS = 90       # Cache lifetime before refetch
 
 
 # ═══════════════════════════════════════
-# HEADLINES TICKER
+# HEADLINES TICKER (Google Sheets)
 # ═══════════════════════════════════════
 
-HEADLINES_RSS_URL = "https://hoopshype.com/rumors/feed/"       # Primary: RSS feed
-HEADLINES_RSS_FALLBACK_URL = "https://hoopshype.com/feed/"    # Fallback RSS: full site
-HEADLINES_URL = "https://hoopshype.com/rumors/"               # Fallback: HTML scraping
-HEADLINES_REFRESH_SECONDS = 180      # How often to scrape (3 min)
-HEADLINES_MAX_ITEMS = 20             # Max headlines in ticker
-HEADLINES_CACHE_TTL_SECONDS = 150    # Cache lifetime
-HEADLINES_NEW_THRESHOLD_MINUTES = 60 # Headlines newer than this get "NEW" badge
+HEADLINES_SHEET_ID = "13Qj9cjBWjWjBD-1UcP96st1hMc6MDYrCtMrTvdb2NyM"
+HEADLINES_SHEET_GID = "950003816"
+HEADLINES_COLUMN = "B"                   # Column containing headline text
+HEADLINES_REFRESH_SECONDS = 180          # How often to fetch (3 min)
+HEADLINES_MAX_ITEMS = 20                 # Max headlines in ticker
+HEADLINES_CACHE_TTL_SECONDS = 150        # Cache lifetime
+HEADLINES_NEW_COUNT = 5                  # First N headlines get "NEW" badge
 
 
 # ═══════════════════════════════════════

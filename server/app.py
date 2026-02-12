@@ -328,7 +328,35 @@ def _fetch_boxscore(game_id):
     try:
         resp = requests.get(url, headers=_NBA_HEADERS, timeout=10)
         resp.raise_for_status()
-        return resp.json().get("game", {})
+        data = resp.json()
+
+        # Log raw response structure for debugging
+        top_keys = list(data.keys()) if isinstance(data, dict) else type(data).__name__
+        log.debug(f"Boxscore raw response keys for {game_id}: {top_keys}")
+
+        game_data = data.get("game", {})
+        if game_data:
+            game_keys = list(game_data.keys())
+            log.debug(f"Boxscore game keys for {game_id}: {game_keys}")
+
+            # Check if team data exists at expected path
+            ht = game_data.get("homeTeam")
+            at = game_data.get("awayTeam")
+            if ht:
+                ht_players = len(ht.get("players", []))
+                ht_stats = bool(ht.get("statistics"))
+                log.debug(f"  homeTeam: {ht_players} players, has stats: {ht_stats}")
+            else:
+                log.warning(f"  homeTeam missing from boxscore {game_id}! Available keys: {game_keys}")
+            if at:
+                at_players = len(at.get("players", []))
+                log.debug(f"  awayTeam: {at_players} players")
+            else:
+                log.warning(f"  awayTeam missing from boxscore {game_id}!")
+        else:
+            log.warning(f"Boxscore 'game' key empty/missing for {game_id}, raw keys: {top_keys}")
+
+        return game_data
     except Exception as e:
         log.debug(f"Boxscore fetch failed for {game_id}: {e}")
         return None
@@ -350,7 +378,8 @@ def _transform_player(player):
     minutes = min_match.group(1) if min_match else "0"
 
     plus_minus = stats.get("plusMinusPoints", 0)
-    pm_str = f"+{plus_minus}" if plus_minus > 0 else str(plus_minus)
+    pm_val = int(plus_minus) if isinstance(plus_minus, float) else plus_minus
+    pm_str = f"+{pm_val}" if pm_val > 0 else str(pm_val)
 
     return {
         "num": player.get("jerseyNum", ""),
@@ -373,17 +402,46 @@ def _transform_player(player):
 def _transform_team_boxscore(team_data):
     """Transform nba_api team boxscore → frontend boxscore format (starters + bench)."""
     players = team_data.get("players", [])
+    if not players:
+        log.warning("_transform_team_boxscore: no players in team_data")
+        return {"starters": [], "bench": []}
+
+    # Log first player structure for debugging
+    p0 = players[0]
+    log.debug(
+        f"Boxscore first player: status={p0.get('status')!r}, "
+        f"starter={p0.get('starter')!r}, played={p0.get('played')!r}, "
+        f"name={p0.get('nameI', p0.get('name', '?'))}"
+    )
+
     starters = []
     bench = []
+    skipped = 0
     for p in players:
-        transformed = _transform_player(p)
-        status = p.get("status", "ACTIVE")
-        if status != "ACTIVE":
+        # Skip players who didn't play — accept ACTIVE, or any player with played="1"
+        status = (p.get("status") or "").upper()
+        played = p.get("played", "")
+        if status in ("INACTIVE", "NOT_WITH_TEAM"):
+            skipped += 1
             continue
-        if p.get("starter", "") == "1":
+        # Also skip if status is explicitly set to something that's not ACTIVE/empty
+        # but the player has played="0" (did not actually play)
+        if played == "0" and status != "ACTIVE":
+            skipped += 1
+            continue
+
+        transformed = _transform_player(p)
+
+        # Handle starter field (can be "1", 1, True)
+        starter_val = p.get("starter", "")
+        if starter_val in ("1", 1, True):
             starters.append(transformed)
         else:
             bench.append(transformed)
+
+    if skipped:
+        log.debug(f"Boxscore: skipped {skipped} inactive players, kept {len(starters)} starters + {len(bench)} bench")
+
     return {"starters": starters, "bench": bench}
 
 
@@ -431,7 +489,10 @@ def _leaders_from_boxscore_players(players):
 
     def _leader(player, stat_key):
         name = player.get("nameI", "") or (player.get("firstName", "") + " " + player.get("familyName", ""))
-        return {"name": _leader_name(name), "val": player.get("statistics", {}).get(stat_key, 0)}
+        val = player.get("statistics", {}).get(stat_key, 0)
+        if isinstance(val, float):
+            val = int(val)  # plusMinusPoints comes as float from CDN
+        return {"name": _leader_name(name), "val": val}
 
     return {
         "pts": _leader(_find_leader("points"), "points"),
@@ -487,18 +548,33 @@ def _transform_game(sb_game, boxscore_data=None):
             }
 
         # Stats and boxscore: from boxscore data if available
-        if box_team:
+        _empty_stats = {"fgPct": "0.0", "threePct": "0.0", "ftPct": "0.0", "reb": 0, "ast": 0, "stl": 0, "blk": 0, "to": 0}
+        _empty_boxscore = {"starters": [], "bench": []}
+        if box_team and box_team.get("statistics"):
             side["stats"] = _team_stats_from_boxscore(box_team)
+        else:
+            side["stats"] = _empty_stats
+        if box_team and box_team.get("players"):
             side["boxscore"] = _transform_team_boxscore(box_team)
         else:
-            side["stats"] = {"fgPct": "0.0", "threePct": "0.0", "ftPct": "0.0", "reb": 0, "ast": 0, "stl": 0, "blk": 0, "to": 0}
-            side["boxscore"] = {"starters": [], "bench": []}
+            side["boxscore"] = _empty_boxscore
 
         return side
 
     # Boxscore team data
-    box_away = boxscore_data.get("awayTeam", {}) if boxscore_data else None
-    box_home = boxscore_data.get("homeTeam", {}) if boxscore_data else None
+    box_away = None
+    box_home = None
+    if boxscore_data:
+        box_away = boxscore_data.get("awayTeam")
+        box_home = boxscore_data.get("homeTeam")
+        game_id = sb_game.get("gameId", "?")
+        away_p = len(box_away.get("players", [])) if box_away else 0
+        home_p = len(box_home.get("players", [])) if box_home else 0
+        log.info(
+            f"Game {game_id}: boxscore has "
+            f"awayTeam={'yes' if box_away else 'NO'}({away_p}p), "
+            f"homeTeam={'yes' if box_home else 'NO'}({home_p}p)"
+        )
 
     # Scoreboard leaders
     game_leaders = sb_game.get("gameLeaders", {})
@@ -644,6 +720,69 @@ def api_scores():
         "count": len(games),
         "hasLive": has_live,
     })
+
+
+@app.route("/api/debug/boxscore")
+def api_debug_boxscore():
+    """Debug endpoint: return raw boxscore structure for the first live/final game."""
+    try:
+        resp = requests.get(config.SCORES_SCOREBOARD_URL, headers=_NBA_HEADERS, timeout=10)
+        resp.raise_for_status()
+        sb = resp.json().get("scoreboard", {})
+        games_raw = sb.get("games", [])
+
+        # Find first live or final game
+        target = None
+        for g in games_raw:
+            if g.get("gameStatus", 1) >= 2:
+                target = g
+                break
+        if not target:
+            return jsonify({"error": "No live/final games", "games": len(games_raw)})
+
+        gid = target["gameId"]
+        box_resp = requests.get(
+            config.SCORES_BOXSCORE_URL.format(game_id=gid),
+            headers=_NBA_HEADERS, timeout=10,
+        )
+        box_resp.raise_for_status()
+        raw = box_resp.json()
+
+        # Return structure summary (not full data — too large)
+        game_data = raw.get("game", {})
+        summary = {
+            "gameId": gid,
+            "raw_top_keys": list(raw.keys()),
+            "game_keys": list(game_data.keys()) if isinstance(game_data, dict) else str(type(game_data)),
+        }
+
+        for side in ("homeTeam", "awayTeam"):
+            team = game_data.get(side)
+            if team and isinstance(team, dict):
+                players = team.get("players", [])
+                summary[side] = {
+                    "keys": list(team.keys()),
+                    "teamTricode": team.get("teamTricode"),
+                    "playersCount": len(players),
+                    "hasStatistics": bool(team.get("statistics")),
+                }
+                if players:
+                    p0 = players[0]
+                    summary[side]["firstPlayer"] = {
+                        "keys": list(p0.keys()),
+                        "status": p0.get("status"),
+                        "starter": p0.get("starter"),
+                        "played": p0.get("played"),
+                        "nameI": p0.get("nameI"),
+                        "hasStatistics": bool(p0.get("statistics")),
+                        "statsKeys": list(p0.get("statistics", {}).keys())[:15],
+                    }
+            else:
+                summary[side] = None
+
+        return jsonify(summary)
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 
 @app.route("/api/status")

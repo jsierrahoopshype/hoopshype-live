@@ -403,40 +403,45 @@ def _team_stats_from_boxscore(team_data):
 
 
 def _leaders_from_scoreboard(leaders_data):
-    """Transform gameLeaders from scoreboard → frontend leaders format."""
+    """Transform gameLeaders from scoreboard → frontend leaders format.
+
+    Scoreboard only has a single leader per team, so extended stats get placeholders.
+    """
+    name = _leader_name(leaders_data.get("name", ""))
+    _empty = {"name": "—", "val": 0}
     return {
-        "pts": {
-            "name": _leader_name(leaders_data.get("name", "")),
-            "val": leaders_data.get("points", 0),
-        },
-        "reb": {
-            "name": _leader_name(leaders_data.get("name", "")),
-            "val": leaders_data.get("rebounds", 0),
-        },
-        "ast": {
-            "name": _leader_name(leaders_data.get("name", "")),
-            "val": leaders_data.get("assists", 0),
-        },
+        "pts": {"name": name, "val": leaders_data.get("points", 0)},
+        "reb": {"name": name, "val": leaders_data.get("rebounds", 0)},
+        "ast": {"name": name, "val": leaders_data.get("assists", 0)},
+        "blk": _empty.copy(),
+        "stl": _empty.copy(),
+        "threepm": _empty.copy(),
+        "to": _empty.copy(),
+        "pm": _empty.copy(),
     }
 
 
 def _leaders_from_boxscore_players(players):
-    """Compute game leaders from boxscore player stats (more accurate than scoreboard leaders)."""
-    pts_leader = max(players, key=lambda p: p.get("statistics", {}).get("points", 0), default={})
-    reb_leader = max(players, key=lambda p: p.get("statistics", {}).get("reboundsTotal", 0), default={})
-    ast_leader = max(players, key=lambda p: p.get("statistics", {}).get("assists", 0), default={})
+    """Compute game leaders from boxscore player stats (more accurate than scoreboard leaders).
+
+    Returns leaders for 8 categories: PTS, REB, AST, BLK, STL, 3PM, TO, +/-.
+    """
+    def _find_leader(stat_key):
+        return max(players, key=lambda p: p.get("statistics", {}).get(stat_key, 0), default={})
 
     def _leader(player, stat_key):
         name = player.get("nameI", "") or (player.get("firstName", "") + " " + player.get("familyName", ""))
-        return {
-            "name": _leader_name(name),
-            "val": player.get("statistics", {}).get(stat_key, 0),
-        }
+        return {"name": _leader_name(name), "val": player.get("statistics", {}).get(stat_key, 0)}
 
     return {
-        "pts": _leader(pts_leader, "points"),
-        "reb": _leader(reb_leader, "reboundsTotal"),
-        "ast": _leader(ast_leader, "assists"),
+        "pts": _leader(_find_leader("points"), "points"),
+        "reb": _leader(_find_leader("reboundsTotal"), "reboundsTotal"),
+        "ast": _leader(_find_leader("assists"), "assists"),
+        "blk": _leader(_find_leader("blocks"), "blocks"),
+        "stl": _leader(_find_leader("steals"), "steals"),
+        "threepm": _leader(_find_leader("threePointersMade"), "threePointersMade"),
+        "to": _leader(_find_leader("turnovers"), "turnovers"),
+        "pm": _leader(_find_leader("plusMinusPoints"), "plusMinusPoints"),
     }
 
 
@@ -456,6 +461,7 @@ def _transform_game(sb_game, boxscore_data=None):
     # Build team sides
     def build_side(team, box_team, leaders_sb):
         side = {
+            "teamId": team.get("teamId", 0),
             "abbr": team.get("teamTricode", ""),
             "city": team.get("teamCity", "").upper(),
             "name": team.get("teamName", ""),
@@ -473,6 +479,11 @@ def _transform_game(sb_game, boxscore_data=None):
                 "pts": {"name": "—", "val": 0},
                 "reb": {"name": "—", "val": 0},
                 "ast": {"name": "—", "val": 0},
+                "blk": {"name": "—", "val": 0},
+                "stl": {"name": "—", "val": 0},
+                "threepm": {"name": "—", "val": 0},
+                "to": {"name": "—", "val": 0},
+                "pm": {"name": "—", "val": 0},
             }
 
         # Stats and boxscore: from boxscore data if available

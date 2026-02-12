@@ -703,6 +703,12 @@ def serve_index():
     return send_from_directory(PROJECT_ROOT, "index.html")
 
 
+@app.route("/hoopshype-logo.png")
+def serve_logo():
+    """Serve the HoopsHype logo image."""
+    return send_from_directory(PROJECT_ROOT, "hoopshype-logo.png")
+
+
 @app.route("/api/bluesky")
 def api_bluesky():
     """Return latest Bluesky posts."""

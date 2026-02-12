@@ -29,8 +29,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 /* ═══ TOPBAR ═══ */
 .topbar{grid-area:topbar;display:flex;align-items:center;justify-content:space-between;padding:0 var(--sp-5);background:linear-gradient(180deg,rgba(10,14,20,0.95),rgba(10,14,20,0.80));border-bottom:1px solid var(--border-subtle);z-index:100}
 .topbar-left{display:flex;align-items:center;gap:var(--sp-4)}
-.logo-text{font-family:var(--font-display);font-weight:800;font-size:21px;letter-spacing:-0.5px}
-.logo-text span{color:var(--accent)}
+.logo-img{height:36px;width:auto;display:block}
 .live-badge{display:flex;align-items:center;gap:6px;padding:4px 12px 4px 10px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.25);border-radius:20px;font-family:var(--font-display);font-weight:700;font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--live-red)}
 .live-dot{width:8px;height:8px;background:var(--live-red);border-radius:50%;animation:livePulse 1.5s ease-in-out infinite}
 @keyframes livePulse{0%,100%{opacity:1;box-shadow:0 0 0 0 var(--live-glow)}50%{opacity:0.6;box-shadow:0 0 0 6px transparent}}
@@ -231,7 +230,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 <div class="broadcast-canvas">
   <header class="topbar">
     <div class="topbar-left">
-      <div class="logo-text">HOOPS<span>HYPE</span> TV</div>
+      <img class="logo-img" src="/hoopshype-logo.png" alt="HoopsHype">
       <div class="live-badge" id="liveBadge"><div class="live-dot"></div>LIVE</div>
     </div>
     <div class="topbar-right">
@@ -461,14 +460,36 @@ function renderBoxscore(g,side){
   const cols=['MIN','PTS','FG','3PT','FT','REB','AST','STL','BLK','TO','+/-'];
   const keys=['min','pts','fg','three','ft','reb','ast','stl','blk','to','pm'];
   const allPlayers=[...team.boxscore.starters,...team.boxscore.bench];
-  // Highlight leaders — numeric stats
+  // Highlight leaders — single best player per stat with tiebreakers
+  function getMins(p){return parseInt(p.min)||0;}
+  function getMakes(str){return parseInt(str.split('-')[0])||0;}
   function sPct(str,ma){const[m,a]=str.split('-').map(Number);return a>=ma?m/a:-1;}
-  const mx={pts:Math.max(0,...allPlayers.map(p=>p.pts)),reb:Math.max(0,...allPlayers.map(p=>p.reb)),ast:Math.max(0,...allPlayers.map(p=>p.ast)),stl:Math.max(0,...allPlayers.map(p=>p.stl)),blk:Math.max(0,...allPlayers.map(p=>p.blk)),to:Math.max(0,...allPlayers.map(p=>p.to))};
-  const mxPm=Math.max(...allPlayers.map(p=>parseInt(p.pm)||0));
-  const mxFg=Math.max(-1,...allPlayers.map(p=>sPct(p.fg,5)));
-  const mxTh=Math.max(-1,...allPlayers.map(p=>sPct(p.three,3)));
-  const mxFt=Math.max(-1,...allPlayers.map(p=>sPct(p.ft,3)));
-  function isHi(p,k){if(k==='min')return false;if(['pts','reb','ast','stl','blk','to'].includes(k))return p[k]===mx[k]&&p[k]>0;if(k==='pm')return(parseInt(p.pm)||0)===mxPm&&mxPm!==0;if(k==='fg')return mxFg>0&&Math.abs(sPct(p.fg,5)-mxFg)<1e-4;if(k==='three')return mxTh>0&&Math.abs(sPct(p.three,3)-mxTh)<1e-4;if(k==='ft')return mxFt>0&&Math.abs(sPct(p.ft,3)-mxFt)<1e-4;return false;}
+  // Counting stats: max value → fewest minutes
+  function pickBestCounting(stat){
+    const maxVal=Math.max(0,...allPlayers.map(p=>p[stat]));
+    if(maxVal<=0)return null;
+    const tied=allPlayers.filter(p=>p[stat]===maxVal);
+    return tied.length===1?tied[0]:tied.reduce((best,p)=>getMins(p)<getMins(best)?p:best);
+  }
+  // +/-: max value → fewest minutes
+  function pickBestPm(){
+    const maxVal=Math.max(...allPlayers.map(p=>parseInt(p.pm)||0));
+    if(maxVal===0)return null;
+    const tied=allPlayers.filter(p=>(parseInt(p.pm)||0)===maxVal);
+    return tied.length===1?tied[0]:tied.reduce((best,p)=>getMins(p)<getMins(best)?p:best);
+  }
+  // Percentage stats: best pct (min attempts) → most makes → fewest minutes
+  function pickBestPct(key,minAtt){
+    const maxPct=Math.max(-1,...allPlayers.map(p=>sPct(p[key],minAtt)));
+    if(maxPct<=0)return null;
+    const tied=allPlayers.filter(p=>Math.abs(sPct(p[key],minAtt)-maxPct)<1e-4);
+    if(tied.length===1)return tied[0];
+    const maxMk=Math.max(...tied.map(p=>getMakes(p[key])));
+    const tied2=tied.filter(p=>getMakes(p[key])===maxMk);
+    return tied2.length===1?tied2[0]:tied2.reduce((best,p)=>getMins(p)<getMins(best)?p:best);
+  }
+  const hiMap={pts:pickBestCounting('pts'),reb:pickBestCounting('reb'),ast:pickBestCounting('ast'),stl:pickBestCounting('stl'),blk:pickBestCounting('blk'),to:pickBestCounting('to'),pm:pickBestPm(),fg:pickBestPct('fg',5),three:pickBestPct('three',3),ft:pickBestPct('ft',3)};
+  function isHi(p,k){if(k==='min')return false;return hiMap[k]===p;}
   const totals={pts:allPlayers.reduce((s,p)=>s+p.pts,0),reb:allPlayers.reduce((s,p)=>s+p.reb,0),ast:allPlayers.reduce((s,p)=>s+p.ast,0),stl:allPlayers.reduce((s,p)=>s+p.stl,0),blk:allPlayers.reduce((s,p)=>s+p.blk,0),to:allPlayers.reduce((s,p)=>s+p.to,0)};
   function sumShooting(players,key){let m=0,a=0;players.forEach(p=>{const[mm,aa]=p[key].split('-').map(Number);m+=mm;a+=aa;});return{made:m,att:a,str:`${m}-${a}`,pct:a>0?(m/a*100).toFixed(1)+'%':'—'};}
   const fgT=sumShooting(allPlayers,'fg'),threeT=sumShooting(allPlayers,'three'),ftT=sumShooting(allPlayers,'ft');

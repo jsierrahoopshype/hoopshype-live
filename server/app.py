@@ -470,7 +470,7 @@ def _leaders_from_scoreboard(leaders_data):
 
     Scoreboard only has a single leader per team, so extended stats get placeholders.
     """
-    name = _leader_name(leaders_data.get("name", ""))
+    name = leaders_data.get("name", "") or "—"
     _empty = {"name": "—", "val": 0}
     return {
         "pts": {"name": name, "val": leaders_data.get("points", 0)},
@@ -493,11 +493,13 @@ def _leaders_from_boxscore_players(players):
         return max(players, key=lambda p: p.get("statistics", {}).get(stat_key, 0), default={})
 
     def _leader(player, stat_key):
-        name = player.get("nameI", "") or (player.get("firstName", "") + " " + player.get("familyName", ""))
+        first = player.get("firstName", "")
+        family = player.get("familyName", "")
+        name = f"{first} {family}".strip() if first and family else (player.get("nameI", "") or "—")
         val = player.get("statistics", {}).get(stat_key, 0)
         if isinstance(val, float):
             val = int(val)  # plusMinusPoints comes as float from CDN
-        return {"name": _leader_name(name), "val": val}
+        return {"name": name, "val": val}
 
     return {
         "pts": _leader(_find_leader("points"), "points"),

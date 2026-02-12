@@ -145,9 +145,10 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .bs-table tfoot .pct{font-size:10px;color:var(--accent);font-weight:600;display:block;margin-top:1px}
 
 /* Mini scores */
-.mini-scores{display:flex;gap:var(--sp-3);padding:var(--sp-2) 0;overflow:hidden;flex-shrink:0}
+.mini-scores{padding:var(--sp-2) 0;overflow:hidden;flex-shrink:0;position:relative}
 .mini-scores.hidden{display:none}
-.mini-game{flex:0 0 auto;display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2) var(--sp-4);background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-md);min-width:190px;transition:border-color 0.2s}
+.mini-scores-track{display:flex;gap:var(--sp-3);transition:transform 0.5s ease}
+.mini-game{flex:0 0 auto;display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2) var(--sp-4);background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-md);min-width:190px;transition:border-color 0.3s,background 0.3s}
 .mini-game.active{border-color:var(--accent);background:var(--bg-panel-alt)}
 .mini-teams{display:flex;flex-direction:column;gap:2px}
 .mini-team-row{display:flex;align-items:center;gap:var(--sp-2)}
@@ -245,7 +246,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
       </div>
       <div class="screen-dots" id="screenDots"><div class="screen-dot active"></div><div class="screen-dot"></div><div class="screen-dot"></div></div>
     </div>
-    <div class="mini-scores" id="miniScores"></div>
+    <div class="mini-scores" id="miniScores"><div class="mini-scores-track" id="miniScoresTrack"></div></div>
     <div class="rankings-mode" id="rankingsMode">
       <div class="next-games-bar"><div class="next-games-label">▶ NEXT GAMES</div><div class="next-games-list" id="nextGamesList"></div></div>
       <div class="rankings-panel" id="rankingsPanel"></div>
@@ -269,7 +270,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 </div>
 
 <script>
-const CONFIG={gameRotateInterval:20000,screenRotateInterval:8000,rankingsRotateInterval:15000,tickerSpeed:50,autoModeHoursAfterLastGame:6};
+const CONFIG={gameRotateInterval:20000,screenDurations:[9000,15000,15000],rankingsRotateInterval:15000,tickerSpeed:50,autoModeHoursAfterLastGame:6,miniScoresVisible:5};
 
 const MOCK_GAMES=[
   {id:'1',status:'live',period:'3RD QTR',periodNum:3,clock:'4:32',venue:'TD Garden, Boston',
@@ -492,8 +493,9 @@ function renderGameScreens(g){
   document.getElementById('screen3').innerHTML=renderBoxscore(g,'home');
 }
 
-// ═══ SCREEN ROTATION ═══
+// ═══ SCREEN ROTATION (per-screen timing) ═══
 let currentScreen=0;
+let screenTimer=null;
 const SCREENS=['screen1','screen2','screen3'];
 function rotateScreen(){
   const prev=currentScreen;currentScreen=(currentScreen+1)%3;
@@ -502,6 +504,13 @@ function rotateScreen(){
   setTimeout(()=>prevEl.classList.remove('exit-left'),500);
   document.getElementById(SCREENS[currentScreen]).classList.add('active');
   document.querySelectorAll('#screenDots .screen-dot').forEach((d,i)=>d.classList.toggle('active',i===currentScreen));
+  scheduleNextScreen();
+}
+function scheduleNextScreen(){
+  if(screenTimer)clearTimeout(screenTimer);
+  // Duration for the CURRENT screen (how long it stays visible)
+  const dur=CONFIG.screenDurations[currentScreen]||9000;
+  screenTimer=setTimeout(rotateScreen,dur);
 }
 
 let currentGameIndex=0;
@@ -517,10 +526,25 @@ function rotateGame(){
   document.querySelectorAll('#screenDots .screen-dot').forEach((d,i)=>d.classList.toggle('active',i===0));
   renderGameScreens(pool[currentGameIndex]);
   renderMiniScores(allGames,pool[currentGameIndex].id);
+  scheduleNextScreen(); // reset screen timer for screen 1 duration
 }
 
 function renderMiniScores(games,activeId){
-  document.getElementById('miniScores').innerHTML=games.map(g=>`<div class="mini-game ${g.id===activeId?'active':''}"><div class="mini-period ${g.status==='final'?'final':''}">${g.status==='final'?'FINAL':g.clock}</div><div class="mini-teams"><div class="mini-team-row"><span class="mini-team-abbr">${g.away.abbr}</span><span class="mini-score ${g.away.score>g.home.score?'leading':''}">${g.away.score}</span></div><div class="mini-team-row"><span class="mini-team-abbr">${g.home.abbr}</span><span class="mini-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div></div></div>`).join('');
+  const track=document.getElementById('miniScoresTrack');
+  track.innerHTML=games.map(g=>`<div class="mini-game ${g.id===activeId?'active':''}" data-gid="${g.id}"><div class="mini-period ${g.status==='final'?'final':''}">${g.status==='final'?'FINAL':(g.status==='scheduled'?g.clock||'—':g.clock)}</div><div class="mini-teams"><div class="mini-team-row"><span class="mini-team-abbr">${g.away.abbr}</span><span class="mini-score ${g.away.score>g.home.score?'leading':''}">${g.away.score}</span></div><div class="mini-team-row"><span class="mini-team-abbr">${g.home.abbr}</span><span class="mini-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div></div></div>`).join('');
+  // Scroll track so active game is centered
+  requestAnimationFrame(()=>{
+    const container=document.getElementById('miniScores');
+    const activeEl=track.querySelector('.mini-game.active');
+    if(!activeEl||games.length<=CONFIG.miniScoresVisible)return track.style.transform='translateX(0)';
+    const containerW=container.offsetWidth;
+    const elLeft=activeEl.offsetLeft;
+    const elW=activeEl.offsetWidth;
+    const targetX=elLeft-(containerW/2)+(elW/2);
+    const maxScroll=track.scrollWidth-containerW;
+    const clampedX=Math.max(0,Math.min(targetX,maxScroll));
+    track.style.transform=`translateX(-${clampedX}px)`;
+  });
 }
 
 function renderTicker(headlines){
@@ -664,7 +688,7 @@ function init(){
   // Show mock data immediately as fallback
   renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);
   setMode(determineAutoMode(MOCK_GAMES));
-  setInterval(rotateScreen,CONFIG.screenRotateInterval);
+  scheduleNextScreen(); // kick off per-screen timer (screen 1 → 9s, screen 2/3 → 15s)
   setInterval(rotateGame,CONFIG.gameRotateInterval);
   setInterval(rotateRankings,CONFIG.rankingsRotateInterval);
   setInterval(rotateNextGames,8000);

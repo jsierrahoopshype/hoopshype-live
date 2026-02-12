@@ -453,6 +453,18 @@ def _transform_team_boxscore(team_data):
 def _team_stats_from_boxscore(team_data):
     """Extract team-level stats from boxscore → frontend stats format."""
     stats = team_data.get("statistics", {})
+
+    # Bench points: prefer CDN value, fall back to computing from non-starter players
+    bench_pts = stats.get("benchPoints", None)
+    if bench_pts is None:
+        players = team_data.get("players", [])
+        bench_pts = sum(
+            p.get("statistics", {}).get("points", 0)
+            for p in players
+            if p.get("starter", "") not in ("1", 1, True)
+            and (p.get("status", "") or "").upper() not in ("INACTIVE", "NOT_WITH_TEAM")
+        )
+
     return {
         "fgPct": f"{stats.get('fieldGoalsPercentage', 0) * 100:.1f}",
         "threePct": f"{stats.get('threePointersPercentage', 0) * 100:.1f}",
@@ -462,6 +474,10 @@ def _team_stats_from_boxscore(team_data):
         "stl": stats.get("steals", 0),
         "blk": stats.get("blocks", 0),
         "to": stats.get("turnovers", 0),
+        "fastBreak": stats.get("fastBreakPointsMade", stats.get("pointsFastBreak", 0)),
+        "paint": stats.get("pointsInThePaint", stats.get("pointsInThePaintMade", 0)),
+        "benchPts": bench_pts,
+        "biggestLead": stats.get("biggestLead", 0),
     }
 
 
@@ -555,7 +571,7 @@ def _transform_game(sb_game, boxscore_data=None):
             }
 
         # Stats and boxscore: from boxscore data if available
-        _empty_stats = {"fgPct": "0.0", "threePct": "0.0", "ftPct": "0.0", "reb": 0, "ast": 0, "stl": 0, "blk": 0, "to": 0}
+        _empty_stats = {"fgPct": "0.0", "threePct": "0.0", "ftPct": "0.0", "reb": 0, "ast": 0, "stl": 0, "blk": 0, "to": 0, "fastBreak": 0, "paint": 0, "benchPts": 0, "biggestLead": 0}
         _empty_boxscore = {"starters": [], "bench": []}
         if box_team and box_team.get("statistics"):
             side["stats"] = _team_stats_from_boxscore(box_team)
@@ -599,6 +615,16 @@ def _transform_game(sb_game, boxscore_data=None):
     # Status text for scheduled games (e.g. "7:00 pm ET")
     status_text = sb_game.get("gameStatusText", "").strip()
 
+    # Game-wide stats (leadChanges and timesTied are the same for both teams)
+    game_stats = {"leadChanges": 0, "timesTied": 0}
+    if boxscore_data:
+        for side_key in ("homeTeam", "awayTeam"):
+            side_stats = boxscore_data.get(side_key, {}).get("statistics", {})
+            if "leadChanges" in side_stats:
+                game_stats["leadChanges"] = side_stats.get("leadChanges", 0)
+                game_stats["timesTied"] = side_stats.get("timesTied", 0)
+                break
+
     return {
         "id": sb_game.get("gameId", ""),
         "status": _game_status_str(game_status),
@@ -610,6 +636,7 @@ def _transform_game(sb_game, boxscore_data=None):
             "away": away_quarters,
             "home": home_quarters,
         },
+        "gameStats": game_stats,
         "away": build_side(away_team, box_away, away_leaders),
         "home": build_side(home_team, box_home, home_leaders),
     }

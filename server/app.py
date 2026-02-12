@@ -381,9 +381,14 @@ def _transform_player(player):
     pm_val = int(plus_minus) if isinstance(plus_minus, float) else plus_minus
     pm_str = f"+{pm_val}" if pm_val > 0 else str(pm_val)
 
+    # Full name: prefer firstName + familyName, fall back to nameI
+    first = player.get("firstName", "")
+    family = player.get("familyName", "")
+    full_name = f"{first} {family}" if first and family else (player.get("nameI", "") or "—")
+
     return {
         "num": player.get("jerseyNum", ""),
-        "name": player.get("nameI", player.get("firstName", "") + " " + player.get("familyName", "")),
+        "name": full_name,
         "pos": player.get("position", ""),
         "min": minutes,
         "pts": stats.get("points", 0),

@@ -522,20 +522,51 @@ function scheduleNextScreen(){
   screenTimer=setTimeout(rotateScreen,dur);
 }
 
-let currentGameIndex=0;
+let lastShownGameId=null;
+let rotationCount=0;
 function getGames(){return liveGames&&liveGames.length>0?liveGames:MOCK_GAMES;}
+function pickNextGame(allGames){
+  const live=allGames.filter(g=>g.status==='live');
+  const finals=allGames.filter(g=>g.status==='final');
+  const playable=[...live,...finals];
+  if(playable.length===0)return null;
+  if(playable.length===1)return playable[0];
+  rotationCount++;
+  // All final: cycle evenly
+  if(live.length===0){
+    let opts=finals.filter(g=>g.id!==lastShownGameId);
+    if(opts.length===0)opts=finals;
+    return opts[rotationCount%opts.length];
+  }
+  // Mix of live + final: show live 3 out of 4 rotations, final 1 out of 4
+  const showFinal=finals.length>0&&rotationCount%4===0;
+  if(showFinal){
+    let opts=finals.filter(g=>g.id!==lastShownGameId);
+    if(opts.length===0)opts=finals;
+    return opts[rotationCount%opts.length];
+  }
+  // Pick from live games, weighted by closeness (close=2x, blowout=1x)
+  const close=live.filter(g=>Math.abs(g.away.score-g.home.score)<=10);
+  const blowout=live.filter(g=>Math.abs(g.away.score-g.home.score)>10);
+  let pool=[];
+  close.forEach(g=>{pool.push(g);pool.push(g);});
+  blowout.forEach(g=>pool.push(g));
+  if(pool.length===0)pool=live;
+  let opts=pool.filter(g=>g.id!==lastShownGameId);
+  if(opts.length===0)opts=pool;
+  return opts[rotationCount%opts.length];
+}
 function rotateGame(){
   const allGames=getGames();
-  const live=allGames.filter(g=>g.status==='live');
-  const pool=live.length>0?live:allGames.filter(g=>g.status!=='scheduled');
-  if(pool.length===0)return;
-  currentGameIndex=(currentGameIndex+1)%pool.length;
+  const pick=pickNextGame(allGames);
+  if(!pick)return;
+  lastShownGameId=pick.id;
   currentScreen=0;
   SCREENS.forEach((id,i)=>{const el=document.getElementById(id);el.classList.remove('active','exit-left');if(i===0)el.classList.add('active');});
   document.querySelectorAll('#screenDots .screen-dot').forEach((d,i)=>d.classList.toggle('active',i===0));
-  renderGameScreens(pool[currentGameIndex]);
-  renderMiniScores(allGames,pool[currentGameIndex].id);
-  scheduleNextScreen(); // reset screen timer for screen 1 duration
+  renderGameScreens(pick);
+  renderMiniScores(allGames,pick.id);
+  scheduleNextScreen();
 }
 
 function renderMiniScores(games,activeId){
@@ -621,7 +652,7 @@ function determineAutoMode(games){
   return'rankings';
 }
 
-function simulateScoreUpdate(){if(liveGames)return;MOCK_GAMES.forEach(g=>{if(g.status==='live'){if(Math.random()>0.5){const side=Math.random()>0.5?'home':'away';g[side].score+=Math.random()>0.7?3:2;}let[m,s]=g.clock.split(':').map(Number);s-=Math.floor(Math.random()*20)+5;if(s<0){m--;s+=60;}if(m<0)m=11;g.clock=`${m}:${s.toString().padStart(2,'0')}`;}});if(currentMode==='live'){const pool=MOCK_GAMES.filter(g=>g.status==='live');if(pool.length>0){const idx=currentGameIndex%pool.length;renderGameScreens(pool[idx]);renderMiniScores(MOCK_GAMES,pool[idx].id);}}}
+function simulateScoreUpdate(){if(liveGames)return;MOCK_GAMES.forEach(g=>{if(g.status==='live'){if(Math.random()>0.5){const side=Math.random()>0.5?'home':'away';g[side].score+=Math.random()>0.7?3:2;}let[m,s]=g.clock.split(':').map(Number);s-=Math.floor(Math.random()*20)+5;if(s<0){m--;s+=60;}if(m<0)m=11;g.clock=`${m}:${s.toString().padStart(2,'0')}`;}});if(currentMode==='live'){const current=lastShownGameId?MOCK_GAMES.find(g=>g.id===lastShownGameId):null;if(current){renderGameScreens(current);renderMiniScores(MOCK_GAMES,current.id);}}}
 
 // ═══ LIVE API POLLING ═══
 let liveFeed=null;    // null = not yet loaded from API
@@ -671,14 +702,15 @@ function pollScores(){
     console.log('[API] Scores response:',data.count,'games, hasLive:',data.hasLive);
     if(data.games&&data.games.length>0){
       liveGames=data.games;
-      // Re-render current game view
+      // Re-render current game (find by lastShownGameId)
       const allGames=getGames();
-      const live=allGames.filter(g=>g.status==='live');
-      const pool=live.length>0?live:allGames.filter(g=>g.status!=='scheduled');
-      if(pool.length>0){
-        const idx=currentGameIndex%pool.length;
-        renderGameScreens(pool[idx]);
-        renderMiniScores(allGames,pool[idx].id);
+      const current=lastShownGameId?allGames.find(g=>g.id===lastShownGameId):null;
+      const playable=allGames.filter(g=>g.status!=='scheduled');
+      const display=current||playable[0]||allGames[0];
+      if(display){
+        lastShownGameId=display.id;
+        renderGameScreens(display);
+        renderMiniScores(allGames,display.id);
       }
       // Update mode: live if any active/final games, rankings if all scheduled or no games
       const mode=determineAutoMode(allGames);
@@ -693,6 +725,7 @@ function pollScores(){
 }
 
 function init(){
+  lastShownGameId=MOCK_GAMES[0].id;
   renderGameScreens(MOCK_GAMES[0]);renderMiniScores(MOCK_GAMES,MOCK_GAMES[0].id);
   // Show mock data immediately as fallback
   renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);

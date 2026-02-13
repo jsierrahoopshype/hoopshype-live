@@ -422,6 +422,11 @@ RANKINGS_SHEETS = [
 ]
 RANKINGS_ROTATE_SECONDS = 15
 RANKINGS_REFRESH_SECONDS = 300
+RANKINGS_CACHE_TTL_SECONDS = 900          # 15 minutes
+RANKINGS_STANDINGS_URL = (
+    "https://stats.nba.com/stats/leaguestandingsv3"
+    "?Season=2024-25&SeasonType=Regular+Season&LeagueID=00"
+)
 
 
 # ═══════════════════════════════════════

@@ -39,11 +39,13 @@ bluesky_cache = TTLCache(maxsize=1, ttl=config.BLUESKY_CACHE_TTL_SECONDS)
 headlines_cache = TTLCache(maxsize=1, ttl=config.HEADLINES_CACHE_TTL_SECONDS)
 # Scores cache uses dynamic TTL — start with live game TTL, rebuilt as needed
 scores_cache = TTLCache(maxsize=1, ttl=config.SCORES_CACHE_TTL_LIVE)
+rankings_cache = TTLCache(maxsize=1, ttl=config.RANKINGS_CACHE_TTL_SECONDS)
 
 # Fallback data (served when fetch fails)
 last_good_bluesky = []
 last_good_headlines = []
 last_good_scores = []
+last_good_rankings = {"standings_east": [], "standings_west": []}
 
 # HTTP request defaults (no shared Session — requests.Session is NOT thread-safe
 # and we call from 20+ concurrent ThreadPoolExecutor workers)
@@ -600,6 +602,85 @@ def fetch_scores():
 
 
 # ═══════════════════════════════════════
+# NBA CONFERENCE STANDINGS
+# ═══════════════════════════════════════
+
+_STANDINGS_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://www.nba.com/",
+    "Accept": "application/json",
+}
+
+
+def fetch_rankings():
+    """Fetch NBA conference standings from stats.nba.com."""
+    global last_good_rankings
+
+    if "rankings" in rankings_cache:
+        return rankings_cache["rankings"]
+
+    log.info("Fetching NBA standings from stats.nba.com...")
+
+    try:
+        resp = requests.get(
+            config.RANKINGS_STANDINGS_URL,
+            headers=_STANDINGS_HEADERS,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        log.warning(f"Standings fetch failed: {e}")
+        return last_good_rankings
+
+    try:
+        result_set = data["resultSets"][0]
+        headers = result_set["headers"]
+        rows = result_set["rowSet"]
+    except (KeyError, IndexError) as e:
+        log.warning(f"Standings response has unexpected structure: {e}")
+        return last_good_rankings
+
+    # Build column index lookup from headers
+    col = {h: i for i, h in enumerate(headers)}
+
+    east = []
+    west = []
+    for row in rows:
+        conference = row[col["Conference"]]
+        team = {
+            "rank": row[col["PlayoffRank"]],
+            "teamName": f"{row[col['TeamCity']]} {row[col['TeamName']]}",
+            "teamAbbr": row[col["TeamSlug"]].upper() if "TeamSlug" in col else row[col.get("TeamAbbreviation", col.get("TeamSlug"))],
+            "teamId": row[col["TeamID"]],
+            "wins": row[col["WINS"]],
+            "losses": row[col["LOSSES"]],
+            "winPct": row[col["WinPCT"]],
+            "gamesBehind": row[col["ConferenceGamesBack"]],
+            "streak": row[col["strCurrentStreak"]],
+            "last10": row[col["L10"]],
+        }
+        if conference == "East":
+            east.append(team)
+        else:
+            west.append(team)
+
+    east.sort(key=lambda t: t["rank"])
+    west.sort(key=lambda t: t["rank"])
+
+    result = {
+        "standings_east": east,
+        "standings_west": west,
+    }
+
+    rankings_cache["rankings"] = result
+    last_good_rankings = result
+    log.info(f"Cached NBA standings (East: {len(east)} teams, West: {len(west)} teams)")
+
+    return result
+
+
+# ═══════════════════════════════════════
 # API ROUTES
 # ═══════════════════════════════════════
 
@@ -635,6 +716,17 @@ def api_scores():
     })
 
 
+@app.route("/api/rankings")
+def api_rankings():
+    """Return NBA conference standings."""
+    result = fetch_rankings()
+    return jsonify({
+        "standings_east": result["standings_east"],
+        "standings_west": result["standings_west"],
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
 @app.route("/api/status")
 def api_status():
     """Health check — returns status of all data sources."""
@@ -653,6 +745,11 @@ def api_status():
             "scores": {
                 "cached": "scores" in scores_cache,
                 "last_count": len(last_good_scores),
+            },
+            "rankings": {
+                "cached": "rankings" in rankings_cache,
+                "last_east_count": len(last_good_rankings["standings_east"]),
+                "last_west_count": len(last_good_rankings["standings_west"]),
             },
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -684,6 +781,11 @@ def _prewarm_caches():
         fetch_scores()
     except Exception as e:
         log.warning(f"Pre-warm scores failed: {e}")
+
+    try:
+        fetch_rankings()
+    except Exception as e:
+        log.warning(f"Pre-warm rankings failed: {e}")
 
     log.info("Cache pre-warm complete")
 

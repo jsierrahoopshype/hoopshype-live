@@ -29,8 +29,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 /* ═══ TOPBAR ═══ */
 .topbar{grid-area:topbar;display:flex;align-items:center;justify-content:space-between;padding:0 var(--sp-5);background:linear-gradient(180deg,rgba(10,14,20,0.95),rgba(10,14,20,0.80));border-bottom:1px solid var(--border-subtle);z-index:100}
 .topbar-left{display:flex;align-items:center;gap:var(--sp-4)}
-.logo-text{font-family:var(--font-display);font-weight:800;font-size:21px;letter-spacing:-0.5px}
-.logo-text span{color:var(--accent)}
+.logo-img{height:36px;width:auto;display:block}
 .live-badge{display:flex;align-items:center;gap:6px;padding:4px 12px 4px 10px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.25);border-radius:20px;font-family:var(--font-display);font-weight:700;font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--live-red)}
 .live-dot{width:8px;height:8px;background:var(--live-red);border-radius:50%;animation:livePulse 1.5s ease-in-out infinite}
 @keyframes livePulse{0%,100%{opacity:1;box-shadow:0 0 0 0 var(--live-glow)}50%{opacity:0.6;box-shadow:0 0 0 6px transparent}}
@@ -65,6 +64,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .s1-team-side{flex:1;display:flex;align-items:center;padding:var(--sp-4) var(--sp-5);gap:var(--sp-4)}
 .s1-team-side.home{justify-content:flex-end;text-align:right}
 .s1-team-logo{width:72px;height:72px;background:var(--bg-panel);border:2px solid var(--border-medium);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:800;font-size:22px;color:var(--text-secondary);flex-shrink:0}
+.s1-team-logo img,.bs-team-logo img{width:85%;height:85%;object-fit:contain}
 .s1-team-info{display:flex;flex-direction:column;gap:2px}
 .s1-team-city{font-family:var(--font-display);font-weight:500;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-tertiary)}
 .s1-team-name{font-family:var(--font-display);font-weight:800;font-size:26px;letter-spacing:-0.5px;line-height:1.1}
@@ -81,12 +81,21 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .s1-q-header{font-family:var(--font-display);font-weight:600;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);padding:2px 0;border-bottom:1px solid var(--border-subtle);width:100%;text-align:center}
 .s1-q-val{font-family:var(--font-mono);font-weight:500;font-size:13px;padding:3px 0;color:var(--text-secondary);width:100%;text-align:center}
 .s1-q-val.current{color:var(--accent-bright);font-weight:700}
+.s1-q-val.highlight,.bs-q-val.highlight{color:var(--accent-bright);font-weight:700}
 .s1-q-val:first-of-type{border-bottom:1px solid rgba(255,255,255,0.03)}
 
 /* Stats + Leaders below scoreboard */
-.s1-bottom{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-4);flex:1;min-height:0}
+.s1-bottom{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr auto;gap:var(--sp-3);flex:1;min-height:0}
 .s1-stats-panel{background:var(--bg-surface);border-radius:var(--radius-md);padding:var(--sp-4);display:flex;flex-direction:column}
 .s1-panel-title{font-family:var(--font-display);font-weight:700;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);margin-bottom:var(--sp-3)}
+.stat-center-row{display:flex;justify-content:center;align-items:center;gap:var(--sp-4);padding:4px 0;border-top:1px solid rgba(255,255,255,0.06)}
+.scv-center-val{font-family:var(--font-mono);font-weight:600;font-size:14px;color:var(--accent-bright)}
+.scv-center-label{font-family:var(--font-display);font-weight:600;font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text-tertiary)}
+.s1-flow-panel{grid-column:1/-1;background:var(--bg-surface);border-radius:var(--radius-md);padding:var(--sp-3) var(--sp-4)}
+.score-flow-svg{width:100%;height:auto;display:block}
+.flow-legend{display:flex;gap:var(--sp-5);justify-content:center;margin-top:var(--sp-1)}
+.flow-legend-item{display:flex;align-items:center;gap:var(--sp-1);font-family:var(--font-display);font-size:10px;font-weight:600;color:var(--text-secondary)}
+.flow-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .stat-compare-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:3px 0}
 .stat-compare-row+.stat-compare-row{border-top:1px solid rgba(255,255,255,0.03)}
 .scv-left,.scv-right{font-family:var(--font-mono);font-weight:500;font-size:14px;color:var(--text-secondary)}
@@ -101,6 +110,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .leader-value{font-family:var(--font-mono);font-weight:600;font-size:14px;color:var(--text-primary)}
 .leaders-team-name{font-family:var(--font-display);font-weight:600;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:var(--sp-1);margin-top:var(--sp-2)}
 .leaders-team-name:first-child{margin-top:0}
+.leaders-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 var(--sp-3)}
 
 /* ─── SCREENS 2 & 3: BOXSCORE W/ SCOREBOARD ─── */
 .bs-scoreboard{display:flex;align-items:stretch;background:var(--bg-surface);border-radius:var(--radius-md);overflow:hidden;margin-bottom:var(--sp-3);flex-shrink:0}
@@ -132,13 +142,13 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .bs-table-wrap{flex:1;overflow:hidden}
 .bs-table{width:100%;border-collapse:collapse;table-layout:fixed}
 .bs-table th{font-family:var(--font-display);font-weight:600;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-tertiary);text-align:center;padding:var(--sp-2);border-bottom:1px solid var(--border-medium);background:var(--bg-panel)}
-.bs-table th:first-child{text-align:left;width:160px}
+.bs-table th:first-child{text-align:left;width:200px}
 .bs-table td{font-family:var(--font-mono);font-size:12.5px;text-align:center;padding:4px var(--sp-2);color:var(--text-secondary);border-bottom:1px solid rgba(255,255,255,0.02)}
 .bs-table tbody tr:nth-child(odd){background:var(--bg-row-odd)}
-.bs-table td:first-child{text-align:left;font-family:var(--font-body);font-weight:500;color:var(--text-primary);font-size:13px}
+.bs-table td:first-child{text-align:left;font-family:var(--font-body);font-weight:500;color:var(--text-primary);font-size:13px;white-space:nowrap}
 .bs-table td.highlight{color:var(--accent-bright);font-weight:700}
 .player-pos{font-family:var(--font-display);font-size:9px;font-weight:600;color:var(--text-muted);margin-left:5px}
-.player-num{font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-right:5px}
+.player-num{font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-left:5px}
 .section-label{font-family:var(--font-display);font-weight:700;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);padding:var(--sp-2);border-bottom:1px solid var(--border-subtle)}
 .section-label td{font-family:var(--font-display);font-weight:700;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);text-align:left}
 .bs-table tfoot td{font-weight:700;color:var(--text-primary);border-top:1px solid var(--border-medium);background:rgba(255,140,0,0.04);font-size:13px}
@@ -157,6 +167,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .mini-score.leading{color:var(--accent-bright);font-weight:700}
 .mini-period{font-family:var(--font-mono);font-size:10px;color:var(--live-red);text-align:center;min-width:36px}
 .mini-period.final{color:var(--text-tertiary)}
+.mini-team-logo{width:20px;height:20px;object-fit:contain;flex-shrink:0}
 
 /* ═══ RANKINGS ═══ */
 .rankings-mode{flex:1;display:none;flex-direction:column;gap:var(--sp-3)}
@@ -227,7 +238,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 <div class="broadcast-canvas">
   <header class="topbar">
     <div class="topbar-left">
-      <div class="logo-text">HOOPS<span>HYPE</span> TV</div>
+      <img class="logo-img" src="/hoopshype-logo.png" alt="HoopsHype">
       <div class="live-badge" id="liveBadge"><div class="live-dot"></div>LIVE</div>
     </div>
     <div class="topbar-right">
@@ -275,9 +286,10 @@ const CONFIG={gameRotateInterval:20000,screenDurations:[9000,15000,15000],rankin
 const MOCK_GAMES=[
   {id:'1',status:'live',period:'3RD QTR',periodNum:3,clock:'4:32',venue:'TD Garden, Boston',
    quarters:{away:[28,31,null,null],home:[30,27,null,null]},
+   gameStats:{leadChanges:8,timesTied:5},
    away:{abbr:'BOS',city:'BOSTON',name:'Celtics',record:'38-12',score:89,
     leaders:{pts:{name:'J. Tatum',val:28},reb:{name:'K. Porzingis',val:9},ast:{name:'D. White',val:7}},
-    stats:{fgPct:'48.2',threePct:'38.5',ftPct:'82.1',reb:32,ast:22,stl:6,blk:4,to:10},
+    stats:{fgPct:'48.2',threePct:'38.5',ftPct:'82.1',reb:32,ast:22,stl:6,blk:4,to:10,fastBreak:12,paint:34,benchPts:7,biggestLead:14},
     boxscore:{starters:[
       {num:'0',name:'J. Tatum',pos:'SF',min:'28',pts:28,reb:6,ast:4,stl:1,blk:0,fg:'10-19',three:'4-8',ft:'4-5',pm:'+7',to:3},
       {num:'7',name:'J. Brown',pos:'SG',min:'26',pts:18,reb:3,ast:3,stl:2,blk:0,fg:'7-14',three:'2-5',ft:'2-2',pm:'+5',to:2},
@@ -289,7 +301,7 @@ const MOCK_GAMES=[
       {num:'77',name:'S. Hauser',pos:'F',min:'10',pts:2,reb:2,ast:1,stl:0,blk:0,fg:'1-3',three:'0-2',ft:'0-0',pm:'-3',to:1}]}},
    home:{abbr:'LAL',city:'LOS ANGELES',name:'Lakers',record:'30-20',score:84,
     leaders:{pts:{name:'L. James',val:24},reb:{name:'A. Davis',val:11},ast:{name:'A. Reaves',val:6}},
-    stats:{fgPct:'45.1',threePct:'33.3',ftPct:'78.6',reb:30,ast:19,stl:5,blk:3,to:12},
+    stats:{fgPct:'45.1',threePct:'33.3',ftPct:'78.6',reb:30,ast:19,stl:5,blk:3,to:12,fastBreak:8,paint:30,benchPts:3,biggestLead:6},
     boxscore:{starters:[
       {num:'23',name:'L. James',pos:'SF',min:'30',pts:24,reb:7,ast:5,stl:1,blk:1,fg:'9-18',three:'3-7',ft:'3-4',pm:'-3',to:3},
       {num:'3',name:'A. Davis',pos:'PF',min:'29',pts:20,reb:11,ast:2,stl:1,blk:2,fg:'8-16',three:'0-1',ft:'4-6',pm:'-2',to:2},
@@ -300,9 +312,10 @@ const MOCK_GAMES=[
       {num:'2',name:'J. Vanderbilt',pos:'F',min:'12',pts:3,reb:2,ast:0,stl:0,blk:0,fg:'1-3',three:'0-0',ft:'1-2',pm:'+2',to:1}]}}},
   {id:'2',status:'live',period:'2ND QTR',periodNum:2,clock:'8:15',venue:'Footprint Center, Phoenix',
    quarters:{away:[28,null,null,null],home:[30,null,null,null]},
+   gameStats:{leadChanges:4,timesTied:3},
    away:{abbr:'MIL',city:'MILWAUKEE',name:'Bucks',record:'32-18',score:48,
     leaders:{pts:{name:'G. Antetokounmpo',val:18},reb:{name:'G. Antetokounmpo',val:7},ast:{name:'D. Lillard',val:5}},
-    stats:{fgPct:'46.8',threePct:'35.0',ftPct:'80.0',reb:18,ast:12,stl:3,blk:2,to:6},
+    stats:{fgPct:'46.8',threePct:'35.0',ftPct:'80.0',reb:18,ast:12,stl:3,blk:2,to:6,fastBreak:6,paint:20,benchPts:0,biggestLead:4},
     boxscore:{starters:[
       {num:'34',name:'G. Antetokounmpo',pos:'PF',min:'18',pts:18,reb:7,ast:3,stl:1,blk:1,fg:'7-12',three:'0-1',ft:'4-6',pm:'-2',to:2},
       {num:'0',name:'D. Lillard',pos:'PG',min:'18',pts:14,reb:1,ast:5,stl:1,blk:0,fg:'5-10',three:'3-6',ft:'1-1',pm:'-3',to:1},
@@ -312,7 +325,7 @@ const MOCK_GAMES=[
      bench:[]}},
    home:{abbr:'PHX',city:'PHOENIX',name:'Suns',record:'29-21',score:52,
     leaders:{pts:{name:'K. Durant',val:20},reb:{name:'J. Nurkic',val:6},ast:{name:'D. Booker',val:4}},
-    stats:{fgPct:'50.0',threePct:'40.0',ftPct:'85.7',reb:20,ast:14,stl:4,blk:1,to:5},
+    stats:{fgPct:'50.0',threePct:'40.0',ftPct:'85.7',reb:20,ast:14,stl:4,blk:1,to:5,fastBreak:10,paint:24,benchPts:0,biggestLead:8},
     boxscore:{starters:[
       {num:'35',name:'K. Durant',pos:'SF',min:'18',pts:20,reb:4,ast:3,stl:1,blk:1,fg:'8-14',three:'2-4',ft:'2-2',pm:'+4',to:1},
       {num:'1',name:'D. Booker',pos:'SG',min:'17',pts:14,reb:2,ast:4,stl:1,blk:0,fg:'5-10',three:'2-4',ft:'2-2',pm:'+3',to:2},
@@ -322,9 +335,10 @@ const MOCK_GAMES=[
      bench:[]}}},
   {id:'3',status:'final',period:'FINAL',periodNum:4,clock:'',venue:'Chase Center, San Francisco',
    quarters:{away:[25,30,28,29],home:[28,27,26,24]},
+   gameStats:{leadChanges:12,timesTied:7},
    away:{abbr:'DEN',city:'DENVER',name:'Nuggets',record:'35-15',score:112,
     leaders:{pts:{name:'N. Jokic',val:32},reb:{name:'N. Jokic',val:14},ast:{name:'N. Jokic',val:9}},
-    stats:{fgPct:'52.3',threePct:'41.2',ftPct:'88.0',reb:42,ast:28,stl:7,blk:3,to:9},
+    stats:{fgPct:'52.3',threePct:'41.2',ftPct:'88.0',reb:42,ast:28,stl:7,blk:3,to:9,fastBreak:16,paint:48,benchPts:10,biggestLead:15},
     boxscore:{starters:[
       {num:'15',name:'N. Jokic',pos:'C',min:'36',pts:32,reb:14,ast:9,stl:2,blk:1,fg:'12-18',three:'2-3',ft:'6-7',pm:'+12',to:3},
       {num:'27',name:'J. Murray',pos:'PG',min:'34',pts:22,reb:3,ast:8,stl:1,blk:0,fg:'9-17',three:'3-6',ft:'1-1',pm:'+8',to:2},
@@ -335,7 +349,7 @@ const MOCK_GAMES=[
       {num:'0',name:'P. Watson',pos:'F',min:'10',pts:4,reb:4,ast:1,stl:0,blk:0,fg:'2-4',three:'0-1',ft:'0-0',pm:'-2',to:1}]}},
    home:{abbr:'GSW',city:'GOLDEN STATE',name:'Warriors',record:'28-22',score:105,
     leaders:{pts:{name:'S. Curry',val:29},reb:{name:'D. Green',val:8},ast:{name:'S. Curry',val:7}},
-    stats:{fgPct:'47.8',threePct:'39.5',ftPct:'84.2',reb:38,ast:25,stl:5,blk:4,to:11},
+    stats:{fgPct:'47.8',threePct:'39.5',ftPct:'84.2',reb:38,ast:25,stl:5,blk:4,to:11,fastBreak:10,paint:40,benchPts:12,biggestLead:10},
     boxscore:{starters:[
       {num:'30',name:'S. Curry',pos:'PG',min:'36',pts:29,reb:4,ast:7,stl:1,blk:0,fg:'10-20',three:'5-11',ft:'4-4',pm:'-5',to:3},
       {num:'11',name:'K. Thompson',pos:'SG',min:'32',pts:22,reb:3,ast:2,stl:0,blk:0,fg:'8-16',three:'4-9',ft:'2-2',pm:'-3',to:2},
@@ -387,16 +401,19 @@ setInterval(updateClock,1000);updateClock();
 
 // ═══ QUARTER SCORES HTML ═══
 function renderQuarters(game,prefix){
-  const qs=['Q1','Q2','Q3','Q4'];
-  const totalLabel='T';
-  return `<div class="${prefix}-quarters">${qs.map((q,i)=>{
-    const aVal=game.quarters.away[i];
-    const hVal=game.quarters.home[i];
+  const awayQ=game.quarters.away;const homeQ=game.quarters.home;
+  const len=Math.max(awayQ.length,homeQ.length,4);
+  const labels=[];for(let i=0;i<len;i++)labels.push(i<4?'Q'+(i+1):(i===4?'OT':'OT'+(i-3)));
+  return `<div class="${prefix}-quarters">${labels.map((q,i)=>{
+    const aVal=awayQ[i]!==undefined?awayQ[i]:null;
+    const hVal=homeQ[i]!==undefined?homeQ[i]:null;
     const isCurrent=i+1===game.periodNum&&game.status==='live';
+    const aHi=aVal!==null&&hVal!==null&&aVal>hVal?' highlight':'';
+    const hHi=aVal!==null&&hVal!==null&&hVal>aVal?' highlight':'';
     return `<div class="${prefix}-q-col">
       <div class="${prefix}-q-header">${q}</div>
-      <div class="${prefix}-q-val${isCurrent?' current':''}">${aVal!==null?aVal:'—'}</div>
-      <div class="${prefix}-q-val${isCurrent?' current':''}">${hVal!==null?hVal:'—'}</div>
+      <div class="${prefix}-q-val${isCurrent?' current':''}${aHi}">${aVal!==null?aVal:'—'}</div>
+      <div class="${prefix}-q-val${isCurrent?' current':''}${hHi}">${hVal!==null?hVal:'—'}</div>
     </div>`;
   }).join('')}<div class="${prefix}-q-col">
     <div class="${prefix}-q-header">T</div>
@@ -405,11 +422,51 @@ function renderQuarters(game,prefix){
   </div></div>`;
 }
 
+// ═══ SCORE FLOW CHART (SVG) ═══
+function renderScoreFlow(g){
+  const aQ=g.quarters.away,hQ=g.quarters.home;
+  let aCum=[0],hCum=[0];
+  for(let i=0;i<aQ.length;i++){
+    if(aQ[i]===null||hQ[i]===null)break;
+    aCum.push(aCum[aCum.length-1]+aQ[i]);
+    hCum.push(hCum[hCum.length-1]+hQ[i]);
+  }
+  if(aCum.length<=1)return '';
+  const maxS=Math.max(...aCum,...hCum,1);
+  const n=aCum.length;
+  const W=480,H=72,padL=28,padR=32,padT=8,padB=16;
+  const plotW=W-padL-padR,plotH=H-padT-padB;
+  function x(i){return padL+i/(n-1)*plotW;}
+  function y(v){return padT+plotH-v/maxS*plotH;}
+  const aLine=aCum.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const hLine=hCum.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const labels=['0'];for(let i=1;i<n;i++)labels.push(i<=4?'Q'+i:(i===5?'OT':'OT'+(i-4)));
+  return `<div class="s1-flow-panel">
+    <div class="s1-panel-title" style="margin-bottom:var(--sp-1)">Score Flow</div>
+    <svg viewBox="0 0 ${W} ${H}" class="score-flow-svg" preserveAspectRatio="xMidYMid meet">
+      ${aCum.map((_,i)=>`<line x1="${x(i).toFixed(1)}" y1="${padT}" x2="${x(i).toFixed(1)}" y2="${H-padB}" stroke="rgba(255,255,255,0.04)"/>`).join('')}
+      <line x1="${padL}" y1="${y(0).toFixed(1)}" x2="${padL+plotW}" y2="${y(0).toFixed(1)}" stroke="rgba(255,255,255,0.03)"/>
+      <polyline points="${aLine}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+      <polyline points="${hLine}" fill="none" stroke="#6B7585" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+      ${aCum.map((v,i)=>`<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" fill="var(--accent)"/>`).join('')}
+      ${hCum.map((v,i)=>`<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" fill="#6B7585"/>`).join('')}
+      ${labels.map((l,i)=>`<text x="${x(i).toFixed(1)}" y="${H-2}" text-anchor="middle" fill="var(--text-muted)" style="font-size:8px;font-family:var(--font-display)">${l}</text>`).join('')}
+      <text x="${(x(n-1)+4).toFixed(1)}" y="${(y(aCum[n-1])+1).toFixed(1)}" fill="var(--accent)" style="font-size:9px;font-weight:700;font-family:var(--font-mono)" dominant-baseline="middle">${aCum[n-1]}</text>
+      <text x="${(x(n-1)+4).toFixed(1)}" y="${(y(hCum[n-1])+1).toFixed(1)}" fill="#6B7585" style="font-size:9px;font-weight:700;font-family:var(--font-mono)" dominant-baseline="middle">${hCum[n-1]}</text>
+    </svg>
+    <div class="flow-legend">
+      <span class="flow-legend-item"><span class="flow-dot" style="background:var(--accent)"></span>${g.away.abbr}</span>
+      <span class="flow-legend-item"><span class="flow-dot" style="background:#6B7585"></span>${g.home.abbr}</span>
+    </div>
+  </div>`;
+}
+
 // ═══ SCREEN 1: BIG SCOREBOARD ═══
 function renderScreen1(g){
   const s=g.away.stats,h=g.home.stats;
   const better=(a,b,lower)=>lower?parseFloat(a)<parseFloat(b):parseFloat(a)>parseFloat(b);
-  const stats=[['FG%',s.fgPct,h.fgPct],['3PT%',s.threePct,h.threePct],['FT%',s.ftPct,h.ftPct],['REB',s.reb,h.reb],['AST',s.ast,h.ast],['STL',s.stl,h.stl],['BLK',s.blk,h.blk],['TO',s.to,h.to]];
+  const stats=[['FG%',s.fgPct,h.fgPct],['3PT%',s.threePct,h.threePct],['FT%',s.ftPct,h.ftPct],['REB',s.reb,h.reb],['AST',s.ast,h.ast],['STL',s.stl,h.stl],['BLK',s.blk,h.blk],['TO',s.to,h.to],['FAST BRK',s.fastBreak,h.fastBreak],['PAINT',s.paint,h.paint],['BENCH',s.benchPts,h.benchPts],['BIG LEAD',s.biggestLead,h.biggestLead]];
+  const gs=g.gameStats||{};
   return `
     <div class="s1-top">
       <div><div class="s1-label">${g.status==='final'?'FINAL SCORE':'FEATURED GAME'}</div><div class="s1-venue">${g.venue}</div></div>
@@ -420,7 +477,7 @@ function renderScreen1(g){
     </div>
     <div class="s1-scoreboard">
       <div class="s1-team-side">
-        <div class="s1-team-logo">${g.away.abbr}</div>
+        <div class="s1-team-logo" data-fb="${g.away.abbr}">${g.away.teamId?`<img src="https://cdn.nba.com/logos/nba/${g.away.teamId}/primary/L/logo.svg" alt="${g.away.abbr}" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`:g.away.abbr}</div>
         <div class="s1-team-info"><div class="s1-team-city">${g.away.city}</div><div class="s1-team-name">${g.away.name}</div><div class="s1-team-record">${g.away.record}</div></div>
       </div>
       <div class="s1-score-center">
@@ -433,18 +490,20 @@ function renderScreen1(g){
       </div>
       <div class="s1-team-side home">
         <div class="s1-team-info" style="align-items:flex-end"><div class="s1-team-city">${g.home.city}</div><div class="s1-team-name">${g.home.name}</div><div class="s1-team-record">${g.home.record}</div></div>
-        <div class="s1-team-logo">${g.home.abbr}</div>
+        <div class="s1-team-logo" data-fb="${g.home.abbr}">${g.home.teamId?`<img src="https://cdn.nba.com/logos/nba/${g.home.teamId}/primary/L/logo.svg" alt="${g.home.abbr}" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`:g.home.abbr}</div>
       </div>
     </div>
     <div class="s1-bottom">
       <div class="s1-stats-panel">
         <div class="s1-panel-title">Team Stats</div>
         ${stats.map(([label,aVal,hVal])=>{const isTO=label==='TO';return `<div class="stat-compare-row"><div class="scv-left ${better(aVal,hVal,isTO)?'better':''}">${aVal}</div><div class="scv-label">${label}</div><div class="scv-right ${better(hVal,aVal,isTO)?'better':''}">${hVal}</div></div>`;}).join('')}
+        <div class="stat-center-row"><span class="scv-center-val">${gs.leadChanges||0}</span><span class="scv-center-label">LEAD CHG</span><span class="scv-center-val">${gs.timesTied||0}</span><span class="scv-center-label">TIMES TIED</span></div>
       </div>
       <div class="s1-stats-panel">
         <div class="s1-panel-title">Game Leaders</div>
-        ${[g.away,g.home].map(t=>`<div class="leaders-team-name">${t.name}</div>${['pts','reb','ast'].map(s=>`<div class="leader-row"><span class="leader-stat-type">${s}</span><span class="leader-player">${t.leaders[s].name}</span><span class="leader-value">${t.leaders[s].val}</span></div>`).join('')}`).join('')}
+        ${[g.away,g.home].map(t=>{const L=t.leaders;return`<div class="leaders-team-name">${t.name}</div><div class="leaders-grid">${[['pts','PTS'],['blk','BLK'],['reb','REB'],['stl','STL'],['ast','AST'],['threepm','3PT'],['to','TO'],['pm','+/-']].map(([k,lb])=>{const l=L[k]||{name:'—',val:0};return`<div class="leader-row"><span class="leader-stat-type">${lb}</span><span class="leader-player">${l.name}</span><span class="leader-value">${k==='pm'&&l.val>0?'+'+l.val:l.val}</span></div>`;}).join('')}</div>`;}).join('')}
       </div>
+      ${renderScoreFlow(g)}
     </div>`;
 }
 
@@ -454,21 +513,49 @@ function renderBoxscore(g,side){
   const cols=['MIN','PTS','FG','3PT','FT','REB','AST','STL','BLK','TO','+/-'];
   const keys=['min','pts','fg','three','ft','reb','ast','stl','blk','to','pm'];
   const allPlayers=[...team.boxscore.starters,...team.boxscore.bench];
-  const maxPts=Math.max(...allPlayers.map(p=>p.pts));
+  // Highlight leaders — single best player per stat with tiebreakers
+  function getMins(p){return parseInt(p.min)||0;}
+  function getMakes(str){return parseInt(str.split('-')[0])||0;}
+  function sPct(str,ma){const[m,a]=str.split('-').map(Number);return a>=ma?m/a:-1;}
+  // Counting stats: max value → fewest minutes
+  function pickBestCounting(stat){
+    const maxVal=Math.max(0,...allPlayers.map(p=>p[stat]));
+    if(maxVal<=0)return null;
+    const tied=allPlayers.filter(p=>p[stat]===maxVal);
+    return tied.length===1?tied[0]:tied.reduce((best,p)=>getMins(p)<getMins(best)?p:best);
+  }
+  // +/-: max value → fewest minutes
+  function pickBestPm(){
+    const maxVal=Math.max(...allPlayers.map(p=>parseInt(p.pm)||0));
+    if(maxVal===0)return null;
+    const tied=allPlayers.filter(p=>(parseInt(p.pm)||0)===maxVal);
+    return tied.length===1?tied[0]:tied.reduce((best,p)=>getMins(p)<getMins(best)?p:best);
+  }
+  // Percentage stats: best pct (min attempts) → most makes → fewest minutes
+  function pickBestPct(key,minAtt){
+    const maxPct=Math.max(-1,...allPlayers.map(p=>sPct(p[key],minAtt)));
+    if(maxPct<=0)return null;
+    const tied=allPlayers.filter(p=>Math.abs(sPct(p[key],minAtt)-maxPct)<1e-4);
+    if(tied.length===1)return tied[0];
+    const maxMk=Math.max(...tied.map(p=>getMakes(p[key])));
+    const tied2=tied.filter(p=>getMakes(p[key])===maxMk);
+    return tied2.length===1?tied2[0]:tied2.reduce((best,p)=>getMins(p)<getMins(best)?p:best);
+  }
+  const hiMap={pts:pickBestCounting('pts'),reb:pickBestCounting('reb'),ast:pickBestCounting('ast'),stl:pickBestCounting('stl'),blk:pickBestCounting('blk'),to:pickBestCounting('to'),pm:pickBestPm(),fg:pickBestPct('fg',5),three:pickBestPct('three',3),ft:pickBestPct('ft',3)};
+  function isHi(p,k){if(k==='min')return false;return hiMap[k]===p;}
   const totals={pts:allPlayers.reduce((s,p)=>s+p.pts,0),reb:allPlayers.reduce((s,p)=>s+p.reb,0),ast:allPlayers.reduce((s,p)=>s+p.ast,0),stl:allPlayers.reduce((s,p)=>s+p.stl,0),blk:allPlayers.reduce((s,p)=>s+p.blk,0),to:allPlayers.reduce((s,p)=>s+p.to,0)};
-  // Compute FG/3PT/FT totals
   function sumShooting(players,key){let m=0,a=0;players.forEach(p=>{const[mm,aa]=p[key].split('-').map(Number);m+=mm;a+=aa;});return{made:m,att:a,str:`${m}-${a}`,pct:a>0?(m/a*100).toFixed(1)+'%':'—'};}
   const fgT=sumShooting(allPlayers,'fg'),threeT=sumShooting(allPlayers,'three'),ftT=sumShooting(allPlayers,'ft');
-
+  function bsLogo(t){return`<div class="bs-team-logo" data-fb="${t.abbr}">${t.teamId?`<img src="https://cdn.nba.com/logos/nba/${t.teamId}/primary/L/logo.svg" alt="${t.abbr}" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`:t.abbr}</div>`;}
   return `
     <div class="bs-scoreboard">
-      <div class="bs-team-side"><div class="bs-team-logo">${g.away.abbr}</div><div><div class="bs-team-name">${g.away.name}</div><div class="bs-team-record">${g.away.record}</div></div></div>
+      <div class="bs-team-side">${bsLogo(g.away)}<div><div class="bs-team-name">${g.away.name}</div><div class="bs-team-record">${g.away.record}</div></div></div>
       <div class="bs-score-center">
         <div class="bs-scores-row"><span class="bs-big-score ${g.away.score>=g.home.score?'leading':''}">${g.away.score}</span><span class="bs-score-sep">–</span><span class="bs-big-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div>
         ${renderQuarters(g,'bs')}
         ${g.clock?`<div class="bs-period-clock">${g.period} — ${g.clock}</div>`:`<div class="bs-period-clock" style="color:var(--text-tertiary)">${g.period}</div>`}
       </div>
-      <div class="bs-team-side home"><div><div class="bs-team-name">${g.home.name}</div><div class="bs-team-record">${g.home.record}</div></div><div class="bs-team-logo">${g.home.abbr}</div></div>
+      <div class="bs-team-side home"><div><div class="bs-team-name">${g.home.name}</div><div class="bs-team-record">${g.home.record}</div></div>${bsLogo(g.home)}</div>
     </div>
     <div class="bs-tabs">
       <div class="bs-tab ${side==='away'?'active':''}">${side==='away'?`<div class="bs-tab-dot"></div>`:''} ${g.away.city} ${g.away.name.toUpperCase()}</div>
@@ -479,8 +566,8 @@ function renderBoxscore(g,side){
         <thead><tr><th>PLAYER</th>${cols.map(c=>`<th>${c}</th>`).join('')}</tr></thead>
         <tbody>
           <tr class="section-label"><td colspan="${cols.length+1}">STARTERS</td></tr>
-          ${team.boxscore.starters.map(p=>`<tr><td><span class="player-num">#${p.num}</span>${p.name}<span class="player-pos">${p.pos}</span></td>${keys.map(k=>`<td${k==='pts'&&p.pts===maxPts&&p.pts>0?' class="highlight"':''}>${p[k]}</td>`).join('')}</tr>`).join('')}
-          ${team.boxscore.bench.length?`<tr class="section-label"><td colspan="${cols.length+1}">BENCH</td></tr>${team.boxscore.bench.map(p=>`<tr><td><span class="player-num">#${p.num}</span>${p.name}<span class="player-pos">${p.pos}</span></td>${keys.map(k=>`<td${k==='pts'&&p.pts===maxPts&&p.pts>0?' class="highlight"':''}>${p[k]}</td>`).join('')}</tr>`).join('')}`:''}
+          ${team.boxscore.starters.map(p=>`<tr><td>${p.name} <span class="player-num">#${p.num}</span></td>${keys.map(k=>`<td${isHi(p,k)?' class="highlight"':''}>${p[k]}</td>`).join('')}</tr>`).join('')}
+          ${team.boxscore.bench.length?`<tr class="section-label"><td colspan="${cols.length+1}">BENCH</td></tr>${team.boxscore.bench.map(p=>`<tr><td>${p.name} <span class="player-num">#${p.num}</span></td>${keys.map(k=>`<td${isHi(p,k)?' class="highlight"':''}>${p[k]}</td>`).join('')}</tr>`).join('')}`:''}
         </tbody>
         <tfoot><tr><td>TEAM</td><td></td><td>${totals.pts}</td><td>${fgT.str}<span class="pct">${fgT.pct}</span></td><td>${threeT.str}<span class="pct">${threeT.pct}</span></td><td>${ftT.str}<span class="pct">${ftT.pct}</span></td><td>${totals.reb}</td><td>${totals.ast}</td><td>${totals.stl}</td><td>${totals.blk}</td><td>${totals.to}</td><td></td></tr></tfoot>
       </table>
@@ -498,7 +585,10 @@ let currentScreen=0;
 let screenTimer=null;
 const SCREENS=['screen1','screen2','screen3'];
 function rotateScreen(){
-  const prev=currentScreen;currentScreen=(currentScreen+1)%3;
+  const prev=currentScreen;
+  const next=(currentScreen+1)%3;
+  if(next===0){rotateGame();return;}
+  currentScreen=next;
   const prevEl=document.getElementById(SCREENS[prev]);
   prevEl.classList.remove('active');prevEl.classList.add('exit-left');
   setTimeout(()=>prevEl.classList.remove('exit-left'),500);
@@ -513,25 +603,56 @@ function scheduleNextScreen(){
   screenTimer=setTimeout(rotateScreen,dur);
 }
 
-let currentGameIndex=0;
+let lastShownGameId=null;
+let rotationCount=0;
 function getGames(){return liveGames&&liveGames.length>0?liveGames:MOCK_GAMES;}
+function pickNextGame(allGames){
+  const live=allGames.filter(g=>g.status==='live');
+  const finals=allGames.filter(g=>g.status==='final');
+  const playable=[...live,...finals];
+  if(playable.length===0)return null;
+  if(playable.length===1)return playable[0];
+  rotationCount++;
+  // All final: cycle evenly
+  if(live.length===0){
+    let opts=finals.filter(g=>g.id!==lastShownGameId);
+    if(opts.length===0)opts=finals;
+    return opts[rotationCount%opts.length];
+  }
+  // Mix of live + final: show live 3 out of 4 rotations, final 1 out of 4
+  const showFinal=finals.length>0&&rotationCount%4===0;
+  if(showFinal){
+    let opts=finals.filter(g=>g.id!==lastShownGameId);
+    if(opts.length===0)opts=finals;
+    return opts[rotationCount%opts.length];
+  }
+  // Pick from live games, weighted by closeness (close=2x, blowout=1x)
+  const close=live.filter(g=>Math.abs(g.away.score-g.home.score)<=10);
+  const blowout=live.filter(g=>Math.abs(g.away.score-g.home.score)>10);
+  let pool=[];
+  close.forEach(g=>{pool.push(g);pool.push(g);});
+  blowout.forEach(g=>pool.push(g));
+  if(pool.length===0)pool=live;
+  let opts=pool.filter(g=>g.id!==lastShownGameId);
+  if(opts.length===0)opts=pool;
+  return opts[rotationCount%opts.length];
+}
 function rotateGame(){
   const allGames=getGames();
-  const live=allGames.filter(g=>g.status==='live');
-  const pool=live.length>0?live:allGames.filter(g=>g.status!=='scheduled');
-  if(pool.length===0)return;
-  currentGameIndex=(currentGameIndex+1)%pool.length;
+  const pick=pickNextGame(allGames);
+  if(!pick)return;
+  lastShownGameId=pick.id;
   currentScreen=0;
   SCREENS.forEach((id,i)=>{const el=document.getElementById(id);el.classList.remove('active','exit-left');if(i===0)el.classList.add('active');});
   document.querySelectorAll('#screenDots .screen-dot').forEach((d,i)=>d.classList.toggle('active',i===0));
-  renderGameScreens(pool[currentGameIndex]);
-  renderMiniScores(allGames,pool[currentGameIndex].id);
-  scheduleNextScreen(); // reset screen timer for screen 1 duration
+  renderGameScreens(pick);
+  renderMiniScores(allGames,pick.id);
+  scheduleNextScreen();
 }
 
 function renderMiniScores(games,activeId){
   const track=document.getElementById('miniScoresTrack');
-  track.innerHTML=games.map(g=>`<div class="mini-game ${g.id===activeId?'active':''}" data-gid="${g.id}"><div class="mini-period ${g.status==='final'?'final':''}">${g.status==='final'?'FINAL':(g.status==='scheduled'?g.clock||'—':g.clock)}</div><div class="mini-teams"><div class="mini-team-row"><span class="mini-team-abbr">${g.away.abbr}</span><span class="mini-score ${g.away.score>g.home.score?'leading':''}">${g.away.score}</span></div><div class="mini-team-row"><span class="mini-team-abbr">${g.home.abbr}</span><span class="mini-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div></div></div>`).join('');
+  track.innerHTML=games.map(g=>`<div class="mini-game ${g.id===activeId?'active':''}" data-gid="${g.id}"><div class="mini-period ${g.status==='final'?'final':''}">${g.status==='final'?'FINAL':(g.status==='scheduled'?g.clock||'—':g.clock)}</div><div class="mini-teams"><div class="mini-team-row">${g.away.teamId?`<img class="mini-team-logo" src="https://cdn.nba.com/logos/nba/${g.away.teamId}/primary/L/logo.svg" onerror="this.style.display='none'">`:''}<span class="mini-team-abbr">${g.away.abbr}</span><span class="mini-score ${g.away.score>g.home.score?'leading':''}">${g.away.score}</span></div><div class="mini-team-row">${g.home.teamId?`<img class="mini-team-logo" src="https://cdn.nba.com/logos/nba/${g.home.teamId}/primary/L/logo.svg" onerror="this.style.display='none'">`:''}<span class="mini-team-abbr">${g.home.abbr}</span><span class="mini-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div></div></div>`).join('');
   // Scroll track so active game is centered
   requestAnimationFrame(()=>{
     const container=document.getElementById('miniScores');
@@ -612,7 +733,7 @@ function determineAutoMode(games){
   return'rankings';
 }
 
-function simulateScoreUpdate(){if(liveGames)return;MOCK_GAMES.forEach(g=>{if(g.status==='live'){if(Math.random()>0.5){const side=Math.random()>0.5?'home':'away';g[side].score+=Math.random()>0.7?3:2;}let[m,s]=g.clock.split(':').map(Number);s-=Math.floor(Math.random()*20)+5;if(s<0){m--;s+=60;}if(m<0)m=11;g.clock=`${m}:${s.toString().padStart(2,'0')}`;}});if(currentMode==='live'){const pool=MOCK_GAMES.filter(g=>g.status==='live');if(pool.length>0){const idx=currentGameIndex%pool.length;renderGameScreens(pool[idx]);renderMiniScores(MOCK_GAMES,pool[idx].id);}}}
+function simulateScoreUpdate(){if(liveGames)return;MOCK_GAMES.forEach(g=>{if(g.status==='live'){if(Math.random()>0.5){const side=Math.random()>0.5?'home':'away';g[side].score+=Math.random()>0.7?3:2;}let[m,s]=g.clock.split(':').map(Number);s-=Math.floor(Math.random()*20)+5;if(s<0){m--;s+=60;}if(m<0)m=11;g.clock=`${m}:${s.toString().padStart(2,'0')}`;}});if(currentMode==='live'){const current=lastShownGameId?MOCK_GAMES.find(g=>g.id===lastShownGameId):null;if(current){renderGameScreens(current);renderMiniScores(MOCK_GAMES,current.id);}}}
 
 // ═══ LIVE API POLLING ═══
 let liveFeed=null;    // null = not yet loaded from API
@@ -662,14 +783,15 @@ function pollScores(){
     console.log('[API] Scores response:',data.count,'games, hasLive:',data.hasLive);
     if(data.games&&data.games.length>0){
       liveGames=data.games;
-      // Re-render current game view
+      // Re-render current game (find by lastShownGameId)
       const allGames=getGames();
-      const live=allGames.filter(g=>g.status==='live');
-      const pool=live.length>0?live:allGames.filter(g=>g.status!=='scheduled');
-      if(pool.length>0){
-        const idx=currentGameIndex%pool.length;
-        renderGameScreens(pool[idx]);
-        renderMiniScores(allGames,pool[idx].id);
+      const current=lastShownGameId?allGames.find(g=>g.id===lastShownGameId):null;
+      const playable=allGames.filter(g=>g.status!=='scheduled');
+      const display=current||playable[0]||allGames[0];
+      if(display){
+        lastShownGameId=display.id;
+        renderGameScreens(display);
+        renderMiniScores(allGames,display.id);
       }
       // Update mode: live if any active/final games, rankings if all scheduled or no games
       const mode=determineAutoMode(allGames);
@@ -684,12 +806,12 @@ function pollScores(){
 }
 
 function init(){
+  lastShownGameId=MOCK_GAMES[0].id;
   renderGameScreens(MOCK_GAMES[0]);renderMiniScores(MOCK_GAMES,MOCK_GAMES[0].id);
   // Show mock data immediately as fallback
   renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);
   setMode(determineAutoMode(MOCK_GAMES));
-  scheduleNextScreen(); // kick off per-screen timer (screen 1 → 9s, screen 2/3 → 15s)
-  setInterval(rotateGame,CONFIG.gameRotateInterval);
+  scheduleNextScreen(); // kick off per-screen timer (screen 0 → 9s, screen 1/2 → 15s, then rotateGame)
   setInterval(rotateRankings,CONFIG.rankingsRotateInterval);
   setInterval(rotateNextGames,8000);
   setInterval(simulateScoreUpdate,5000);

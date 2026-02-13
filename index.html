@@ -189,6 +189,21 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .rank-team{font-family:var(--font-body);font-size:12px;color:var(--text-tertiary);margin-left:var(--sp-2)}
 .rank-value{font-family:var(--font-mono);font-weight:500}
 
+/* ─── STANDINGS ─── */
+.standings-table{table-layout:fixed}
+.standings-table th{text-align:center;padding:var(--sp-2) var(--sp-2)}
+.standings-table th:nth-child(1){width:50px}
+.standings-table th:nth-child(2){text-align:left;width:auto}
+.standings-table td{text-align:center;font-family:var(--font-mono);font-size:13px;color:var(--text-secondary);padding:var(--sp-2)}
+.standings-team-cell{display:flex;align-items:center;gap:var(--sp-2);font-family:var(--font-body);font-weight:500;color:var(--text-primary);text-align:left}
+.standings-logo{width:24px;height:24px;flex-shrink:0}
+.standings-top-seed td{color:var(--accent-bright)!important}
+.standings-top-seed .rank-num{color:var(--accent-bright)}
+.standings-top-seed .standings-team-cell{color:var(--accent-bright);font-weight:700}
+.standings-playoff-line td{border-bottom:2px solid var(--accent)!important}
+.standings-playin-line td{border-bottom:2px solid var(--text-muted)!important}
+.standings-loading{display:flex;align-items:center;justify-content:center;height:100%;font-family:var(--font-display);font-size:16px;color:var(--text-tertiary)}
+
 /* ═══ SIDEBAR ═══ */
 .sidebar{grid-area:sidebar;display:flex;flex-direction:column;padding:var(--sp-4) var(--sp-3) var(--sp-3) 0;gap:var(--sp-3);overflow:hidden}
 .sidebar-header{display:flex;align-items:center;padding:0 var(--sp-3) var(--sp-2);gap:var(--sp-2)}
@@ -270,7 +285,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 </div>
 
 <script>
-const CONFIG={gameRotateInterval:20000,screenDurations:[9000,15000,15000],rankingsRotateInterval:15000,tickerSpeed:50,autoModeHoursAfterLastGame:6,miniScoresVisible:5};
+const CONFIG={gameRotateInterval:20000,screenDurations:[9000,15000,15000],rankingsRotateInterval:12000,tickerSpeed:50,autoModeHoursAfterLastGame:6,miniScoresVisible:5};
 
 const MOCK_GAMES=[
   {id:'1',status:'live',period:'3RD QTR',periodNum:3,clock:'4:32',venue:'TD Garden, Boston',
@@ -347,11 +362,6 @@ const MOCK_GAMES=[
 
 const MOCK_NEXT_GAMES=[{away:'OKC',home:'MIN',time:'Tomorrow 8:00 PM ET'},{away:'CLE',home:'BOS',time:'Tomorrow 7:30 PM ET'},{away:'DAL',home:'LAC',time:'Tomorrow 10:00 PM ET'},{away:'SAC',home:'HOU',time:'Wed 8:30 PM ET'}];
 
-const MOCK_RANKINGS=[
-  {title:'Trade Value Rankings 2025',source:'HoopsHype',columns:['Rank','Player','Team','Trade Value'],data:[[1,'Luka Doncic','DAL','$210M'],[2,'Shai Gilgeous-Alexander','OKC','$205M'],[3,'Jayson Tatum','BOS','$198M'],[4,'Nikola Jokic','DEN','$195M'],[5,'Anthony Edwards','MIN','$190M'],[6,'Giannis Antetokounmpo','MIL','$185M'],[7,'Victor Wembanyama','SAS','$180M'],[8,'Tyrese Haliburton','IND','$165M'],[9,'Ja Morant','MEM','$158M'],[10,'LaMelo Ball','CHA','$150M']]},
-  {title:'NBA Salary Rankings 2024-25',source:'HoopsHype',columns:['Rank','Player','Team','Salary'],data:[[1,'Stephen Curry','GSW','$55.8M'],[2,'Nikola Jokic','DEN','$51.4M'],[3,'Joel Embiid','PHI','$51.4M'],[4,'Kevin Durant','PHX','$51.2M'],[5,'Bradley Beal','PHX','$50.2M'],[6,'LeBron James','LAL','$48.7M'],[7,'Giannis Antetokounmpo','MIL','$48.8M'],[8,'Paul George','PHI','$49.2M'],[9,'Kawhi Leonard','LAC','$49.3M'],[10,'Jaylen Brown','BOS','$49.5M']]},
-  {title:'Points Per Game Leaders',source:'HoopsHype',columns:['Rank','Player','Team','PPG'],data:[[1,'Luka Doncic','DAL','34.2'],[2,'Shai Gilgeous-Alexander','OKC','31.8'],[3,'Giannis Antetokounmpo','MIL','31.4'],[4,'Joel Embiid','PHI','30.1'],[5,'Kevin Durant','PHX','28.5'],[6,'Jayson Tatum','BOS','27.9'],[7,'Anthony Edwards','MIN','27.2'],[8,"De'Aaron Fox",'SAC','26.8'],[9,'Donovan Mitchell','CLE','26.3'],[10,'LeBron James','LAL','25.8']]}
-];
 
 const MOCK_HEADLINES=[
   {text:'Lakers exploring trade options for additional wing depth ahead of deadline',isNew:true,time:'12m'},
@@ -565,8 +575,8 @@ function renderFeed(posts){
   }).join('');
 }
 
-let currentRankingIndex=0;
-function renderRankings(r){const p=document.getElementById('rankingsPanel');p.style.animation='none';p.offsetHeight;p.style.animation='';const dots=MOCK_RANKINGS.map((_,i)=>`<div class="rankings-progress-dot ${i===currentRankingIndex?'active':''}"></div>`).join('');p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div><table class="rankings-table"><thead><tr>${r.columns.map(c=>`<th>${c}</th>`).join('')}</tr></thead><tbody>${r.data.map(row=>`<tr><td><span class="rank-num ${row[0]<=3?'top-3':''}">${row[0]}</span></td><td><span class="rank-player">${row[1]}</span><span class="rank-team">${row[2]}</span></td><td></td><td><span class="rank-value">${row[3]}</span></td></tr>`).join('')}</tbody></table>`;}
+let currentStandingsConf=0;
+function renderRankings(){const p=document.getElementById('rankingsPanel');p.style.animation='none';p.offsetHeight;p.style.animation='';if(!rankingsData){p.innerHTML='<div class="standings-loading">Loading standings...</div>';return;}const confs=[{key:'standings_east',title:'EASTERN CONFERENCE STANDINGS'},{key:'standings_west',title:'WESTERN CONFERENCE STANDINGS'}];const conf=confs[currentStandingsConf];const teams=rankingsData[conf.key]||[];const dots=confs.map((_,i)=>`<div class="rankings-progress-dot ${i===currentStandingsConf?'active':''}"></div>`).join('');p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${conf.title}</div><div class="rankings-source">NBA</div></div><div class="rankings-progress">${dots}</div></div><table class="rankings-table standings-table"><thead><tr><th>RANK</th><th>TEAM</th><th>W</th><th>L</th><th>PCT</th><th>GB</th><th>STRK</th><th>L10</th></tr></thead><tbody>${teams.map(t=>{const cls=[];if(t.rank===1)cls.push('standings-top-seed');if(t.rank===6)cls.push('standings-playoff-line');if(t.rank===10)cls.push('standings-playin-line');const pct=typeof t.winPct==='number'?t.winPct.toFixed(3).replace(/^0/,''):t.winPct;const gb=t.gamesBehind==0?'—':t.gamesBehind;const logoUrl='https://cdn.nba.com/logos/nba/'+t.teamId+'/primary/L/logo.svg';return `<tr class="${cls.join(' ')}"><td><span class="rank-num${t.rank<=3?' top-3':''}">${t.rank}</span></td><td><div class="standings-team-cell"><img class="standings-logo" src="${logoUrl}" alt="" onerror="this.style.display='none'">${t.teamName}</div></td><td>${t.wins}</td><td>${t.losses}</td><td>${pct}</td><td>${gb}</td><td>${t.streak}</td><td>${t.last10}</td></tr>`;}).join('')}</tbody></table>`;}
 let nextGamesPages=[];let currentNextGamesPage=0;
 function renderNextGames(games){
   const perPage=5;
@@ -582,10 +592,10 @@ function _showNextGamesPage(){
   container.innerHTML=nextGamesPages.map((pg,pi)=>`<div class="next-games-page${pi===currentNextGamesPage?' active':''}">${pg.map(g=>`<div class="next-game-item"><span class="next-game-teams">${g.away} @ ${g.home}</span><span class="next-game-time">${g.time}</span></div>`).join('')}</div>`).join('');
 }
 function rotateNextGames(){if(nextGamesPages.length<=1)return;currentNextGamesPage=(currentNextGamesPage+1)%nextGamesPages.length;_showNextGamesPage();}
-function rotateRankings(){currentRankingIndex=(currentRankingIndex+1)%MOCK_RANKINGS.length;renderRankings(MOCK_RANKINGS[currentRankingIndex]);}
+function rotateRankings(){currentStandingsConf=(currentStandingsConf+1)%2;renderRankings();}
 
 let currentMode=null;
-function setMode(mode){if(mode===currentMode)return;currentMode=mode;const fg=document.getElementById('featuredGame'),ms=document.getElementById('miniScores'),rm=document.getElementById('rankingsMode'),lb=document.getElementById('liveBadge');if(mode==='live'){fg.classList.remove('hidden');ms.classList.remove('hidden');rm.classList.remove('active');lb.style.display='flex';}else{fg.classList.add('hidden');ms.classList.add('hidden');rm.classList.add('active');lb.style.display='none';const scheduled=getGames().filter(g=>g.status==='scheduled');if(scheduled.length>0){renderNextGames(scheduled.map(g=>({away:g.away.abbr,home:g.home.abbr,time:g.clock||'TBD'})));}else{renderNextGames(MOCK_NEXT_GAMES);}renderRankings(MOCK_RANKINGS[currentRankingIndex]);}}
+function setMode(mode){if(mode===currentMode)return;currentMode=mode;const fg=document.getElementById('featuredGame'),ms=document.getElementById('miniScores'),rm=document.getElementById('rankingsMode'),lb=document.getElementById('liveBadge');if(mode==='live'){fg.classList.remove('hidden');ms.classList.remove('hidden');rm.classList.remove('active');lb.style.display='flex';}else{fg.classList.add('hidden');ms.classList.add('hidden');rm.classList.add('active');lb.style.display='none';const scheduled=getGames().filter(g=>g.status==='scheduled');if(scheduled.length>0){renderNextGames(scheduled.map(g=>({away:g.away.abbr,home:g.home.abbr,time:g.clock||'TBD'})));}else{renderNextGames(MOCK_NEXT_GAMES);}renderRankings();}}
 // LIVE mode: from first tip-off until 6h after last game ends
 // Fallback: if all games scheduled, stay in rankings until first goes live
 // If all games final, stay live for 6 hours after (estimated via scheduled start + 8.5h)
@@ -618,6 +628,7 @@ function simulateScoreUpdate(){if(liveGames)return;MOCK_GAMES.forEach(g=>{if(g.s
 let liveFeed=null;    // null = not yet loaded from API
 let liveHeadlines=null;
 let liveGames=null;   // null = not yet loaded; use MOCK_GAMES as fallback
+let rankingsData=null;  // null = not yet loaded from /api/rankings
 
 function pollBluesky(){
   console.log('[API] Polling /api/bluesky...');
@@ -683,6 +694,21 @@ function pollScores(){
   }).catch(e=>console.warn('[API] Scores poll failed:',e));
 }
 
+function pollRankings(){
+  console.log('[API] Polling /api/rankings...');
+  fetch('/api/rankings').then(r=>{
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }).then(data=>{
+    console.log('[API] Rankings response: East:',data.standings_east?.length,'West:',data.standings_west?.length);
+    if((data.standings_east&&data.standings_east.length>0)||(data.standings_west&&data.standings_west.length>0)){
+      rankingsData=data;
+      if(currentMode==='rankings')renderRankings();
+      console.log('[API] Rankings data cached');
+    }
+  }).catch(e=>console.warn('[API] Rankings poll failed:',e));
+}
+
 function init(){
   renderGameScreens(MOCK_GAMES[0]);renderMiniScores(MOCK_GAMES,MOCK_GAMES[0].id);
   // Show mock data immediately as fallback
@@ -696,10 +722,11 @@ function init(){
   setInterval(()=>setMode(determineAutoMode(getGames())),30000);
   document.addEventListener('keydown',e=>{if(e.key==='1')setMode('live');if(e.key==='2')setMode('rankings');});
   // Start live API polling — fetch immediately, then on interval
-  pollBluesky();pollHeadlines();pollScores();
+  pollBluesky();pollHeadlines();pollScores();pollRankings();
   setInterval(pollBluesky,120000);   // every 2 minutes
   setInterval(pollHeadlines,180000); // every 3 minutes
   setInterval(pollScores,30000);     // every 30 seconds
+  setInterval(pollRankings,10800000); // every 3 hours
 }
 init();
 </script>

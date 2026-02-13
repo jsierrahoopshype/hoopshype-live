@@ -425,18 +425,28 @@ function renderQuarters(game,prefix){
 // ═══ SCORE FLOW CHART (SVG) ═══
 function renderScoreFlow(g){
   const aQ=g.quarters.away,hQ=g.quarters.home;
-  let aCum=[0],hCum=[0];
+  // Count only quarters actually played
+  let played=0;
   for(let i=0;i<aQ.length;i++){
-    if(aQ[i]===null||hQ[i]===null)break;
-    aCum.push(aCum[aCum.length-1]+aQ[i]);
-    hCum.push(hCum[hCum.length-1]+hQ[i]);
+    if(aQ[i]===null||aQ[i]===undefined||hQ[i]===null||hQ[i]===undefined)break;
+    if(i>0&&aQ[i]===0&&hQ[i]===0)break;
+    played++;
+  }
+  if(played===0)return '';
+  let aCum=[0],hCum=[0];
+  for(let i=0;i<played;i++){
+    aCum.push(aCum[aCum.length-1]+(aQ[i]||0));
+    hCum.push(hCum[hCum.length-1]+(hQ[i]||0));
   }
   if(aCum.length<=1)return '';
   const maxS=Math.max(...aCum,...hCum,1);
   const n=aCum.length;
+  const totalQ=Math.max(aQ.length,4);
   const W=480,H=72,padL=28,padR=32,padT=8,padB=16;
-  const plotW=W-padL-padR,plotH=H-padT-padB;
-  function x(i){return padL+i/(n-1)*plotW;}
+  const fullPlotW=W-padL-padR;
+  const plotW=fullPlotW*(played/totalQ);
+  const plotH=H-padT-padB;
+  function x(i){return padL+(n>1?i/(n-1):0)*plotW;}
   function y(v){return padT+plotH-v/maxS*plotH;}
   const aLine=aCum.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
   const hLine=hCum.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');

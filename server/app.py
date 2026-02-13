@@ -39,11 +39,14 @@ bluesky_cache = TTLCache(maxsize=1, ttl=config.BLUESKY_CACHE_TTL_SECONDS)
 headlines_cache = TTLCache(maxsize=1, ttl=config.HEADLINES_CACHE_TTL_SECONDS)
 # Scores cache uses dynamic TTL — start with live game TTL, rebuilt as needed
 scores_cache = TTLCache(maxsize=1, ttl=config.SCORES_CACHE_TTL_LIVE)
+# Rankings cache — 15 minute TTL
+rankings_cache = TTLCache(maxsize=1, ttl=900)
 
 # Fallback data (served when fetch fails)
 last_good_bluesky = []
 last_good_headlines = []
 last_good_scores = []
+last_good_rankings = {}
 
 # HTTP request defaults (no shared Session — requests.Session is NOT thread-safe
 # and we call from 20+ concurrent ThreadPoolExecutor workers)
@@ -209,6 +212,7 @@ def fetch_headlines():
     try:
         resp = requests.get(csv_url, timeout=15)
         resp.raise_for_status()
+        resp.encoding = 'utf-8'  # Force UTF-8 (requests guesses ISO-8859-1 without charset header)
     except Exception as e:
         log.warning(f"Google Sheets headlines fetch failed: {e}")
         return last_good_headlines
@@ -721,6 +725,115 @@ def fetch_scores():
 
 
 # ═══════════════════════════════════════
+# NBA STANDINGS (stats.nba.com)
+# ═══════════════════════════════════════
+
+_STANDINGS_URL = (
+    "https://stats.nba.com/stats/leaguestandingsv3"
+    "?Season=2024-25&SeasonType=Regular+Season&LeagueID=00"
+)
+_STANDINGS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Referer": "https://www.nba.com/",
+    "Accept": "application/json",
+}
+
+
+def _parse_streak(row, col):
+    """Parse current streak from standings data."""
+    try:
+        # strCurrentStreak is like "W 3" or "L 2"
+        if "strCurrentStreak" in col:
+            val = row[col["strCurrentStreak"]]
+            if val and isinstance(val, str):
+                return val.replace(" ", "")  # "W 3" -> "W3"
+        # CurrentStreak is a number: positive=wins, negative=losses
+        if "CurrentStreak" in col:
+            val = int(row[col["CurrentStreak"]] or 0)
+            return f"{'W' if val >= 0 else 'L'}{abs(val)}"
+    except Exception:
+        pass
+    return "—"
+
+
+def _parse_last10(row, col):
+    """Parse last 10 games record from standings data."""
+    try:
+        if "L10_WINS" in col and "L10_LOSSES" in col:
+            return f"{int(row[col['L10_WINS']])}-{int(row[col['L10_LOSSES']])}"
+        if "Record_Last_10" in col:
+            return str(row[col["Record_Last_10"]])
+    except Exception:
+        pass
+    return "—"
+
+
+def fetch_rankings():
+    """Fetch NBA conference standings from stats.nba.com."""
+    global last_good_rankings
+
+    if "rankings" in rankings_cache:
+        return rankings_cache["rankings"]
+
+    log.info("Fetching NBA standings from stats.nba.com...")
+
+    try:
+        resp = requests.get(_STANDINGS_URL, headers=_STANDINGS_HEADERS, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+
+        result_set = data.get("resultSets", [{}])[0]
+        headers = result_set.get("headers", [])
+        rows = result_set.get("rowSet", [])
+
+        # Build column index map
+        col = {h: i for i, h in enumerate(headers)}
+
+        east = []
+        west = []
+
+        for row in rows:
+            conf = row[col.get("Conference", 0)] if "Conference" in col else ""
+            team = {
+                "rank": row[col["PlayoffRank"]] if "PlayoffRank" in col else 0,
+                "teamName": row[col["TeamName"]] if "TeamName" in col else "",
+                "teamAbbr": row[col["TeamSlug"]] if "TeamSlug" in col else (row[col.get("TeamAbbreviation", 0)] if "TeamAbbreviation" in col else ""),
+                "teamId": row[col["TeamID"]] if "TeamID" in col else 0,
+                "wins": row[col["WINS"]] if "WINS" in col else 0,
+                "losses": row[col["LOSSES"]] if "LOSSES" in col else 0,
+                "winPct": round(row[col["WinPCT"]] if "WinPCT" in col else 0, 3),
+                "gamesBehind": row[col["ConferenceGamesBack"]] if "ConferenceGamesBack" in col else 0,
+                "streak": _parse_streak(row, col),
+                "last10": _parse_last10(row, col),
+            }
+
+            if conf.lower() == "east":
+                east.append(team)
+            elif conf.lower() == "west":
+                west.append(team)
+
+        east.sort(key=lambda t: t["rank"])
+        west.sort(key=lambda t: t["rank"])
+
+        result = {
+            "standings_east": east,
+            "standings_west": west,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        rankings_cache["rankings"] = result
+        last_good_rankings = result
+        log.info(f"Cached standings: {len(east)} East, {len(west)} West teams")
+        return result
+
+    except Exception as e:
+        log.warning(f"Standings fetch failed: {e}")
+        if last_good_rankings:
+            return last_good_rankings
+        return {"standings_east": [], "standings_west": [], "updated_at": ""}
+
+
+# ═══════════════════════════════════════
 # API ROUTES
 # ═══════════════════════════════════════
 
@@ -760,6 +873,13 @@ def api_scores():
         "count": len(games),
         "hasLive": has_live,
     })
+
+
+@app.route("/api/rankings")
+def api_rankings():
+    """Return NBA conference standings."""
+    data = fetch_rankings()
+    return jsonify(data)
 
 
 @app.route("/api/debug/boxscore")
@@ -844,6 +964,10 @@ def api_status():
                 "cached": "scores" in scores_cache,
                 "last_count": len(last_good_scores),
             },
+            "rankings": {
+                "cached": "rankings" in rankings_cache,
+                "has_data": bool(last_good_rankings),
+            },
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
@@ -874,6 +998,11 @@ def _prewarm_caches():
         fetch_scores()
     except Exception as e:
         log.warning(f"Pre-warm scores failed: {e}")
+
+    try:
+        fetch_rankings()
+    except Exception as e:
+        log.warning(f"Pre-warm rankings failed: {e}")
 
     log.info("Cache pre-warm complete")
 

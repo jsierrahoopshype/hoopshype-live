@@ -215,6 +215,10 @@ def fetch_headlines():
         log.warning(f"Google Sheets headlines fetch failed: {e}")
         return last_good_headlines
 
+    # Force UTF-8 decoding — Google Sheets CSV is UTF-8 but requests
+    # sometimes guesses wrong (ISO-8859-1), causing garbled characters
+    resp.encoding = 'utf-8'
+
     # Parse CSV — column B is index 1 (0-indexed)
     col_index = ord(config.HEADLINES_COLUMN.upper()) - ord("A")
     reader = csv.reader(io.StringIO(resp.text))

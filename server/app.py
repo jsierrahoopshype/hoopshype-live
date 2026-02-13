@@ -405,6 +405,10 @@ def _team_stats_from_boxscore(team_data):
         "stl": stats.get("steals", 0),
         "blk": stats.get("blocks", 0),
         "to": stats.get("turnovers", 0),
+        "fastBreak": stats.get("pointsFastBreak", 0),
+        "paint": stats.get("pointsInThePaint", 0),
+        "benchPts": stats.get("benchPoints", 0),
+        "biggestLead": stats.get("biggestLead", 0),
     }
 
 
@@ -486,7 +490,7 @@ def _transform_game(sb_game, boxscore_data=None):
             side["stats"] = _team_stats_from_boxscore(box_team)
             side["boxscore"] = _transform_team_boxscore(box_team)
         else:
-            side["stats"] = {"fgPct": "0.0", "threePct": "0.0", "ftPct": "0.0", "reb": 0, "ast": 0, "stl": 0, "blk": 0, "to": 0}
+            side["stats"] = {"fgPct": "0.0", "threePct": "0.0", "ftPct": "0.0", "reb": 0, "ast": 0, "stl": 0, "blk": 0, "to": 0, "fastBreak": 0, "paint": 0, "benchPts": 0, "biggestLead": 0}
             side["boxscore"] = {"starters": [], "bench": []}
 
         return side

@@ -39,14 +39,13 @@ bluesky_cache = TTLCache(maxsize=1, ttl=config.BLUESKY_CACHE_TTL_SECONDS)
 headlines_cache = TTLCache(maxsize=1, ttl=config.HEADLINES_CACHE_TTL_SECONDS)
 # Scores cache uses dynamic TTL — start with live game TTL, rebuilt as needed
 scores_cache = TTLCache(maxsize=1, ttl=config.SCORES_CACHE_TTL_LIVE)
-# Rankings cache — 15 minute TTL
-rankings_cache = TTLCache(maxsize=1, ttl=900)
+salaries_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min TTL
 
 # Fallback data (served when fetch fails)
 last_good_bluesky = []
 last_good_headlines = []
 last_good_scores = []
-last_good_rankings = {}
+last_good_salaries = {"rankings": [], "teams": {}, "count": 0}
 
 # HTTP request defaults (no shared Session — requests.Session is NOT thread-safe
 # and we call from 20+ concurrent ThreadPoolExecutor workers)
@@ -212,7 +211,6 @@ def fetch_headlines():
     try:
         resp = requests.get(csv_url, timeout=15)
         resp.raise_for_status()
-        resp.encoding = 'utf-8'  # Force UTF-8 (requests guesses ISO-8859-1 without charset header)
     except Exception as e:
         log.warning(f"Google Sheets headlines fetch failed: {e}")
         return last_good_headlines
@@ -725,117 +723,185 @@ def fetch_scores():
 
 
 # ═══════════════════════════════════════
-# NBA STANDINGS (stats.nba.com)
+# API ROUTES
 # ═══════════════════════════════════════
 
-_STANDINGS_URL = (
-    "https://stats.nba.com/stats/leaguestandingsv3"
-    "?Season=2024-25&SeasonType=Regular+Season&LeagueID=00"
-)
-_STANDINGS_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Referer": "https://www.nba.com/",
-    "Accept": "application/json",
+# ═══════════════════════════════════════
+# TEAM SALARIES (Google Sheets)
+# ═══════════════════════════════════════
+
+_SALARIES_SHEET_ID = "11llk0icQqoi0JwJXat5KO8y2RQeBMN5rS9FhAY56Idc"
+_SALARIES_GID = "0"
+
+# Official NBA 2025-26 international players → ISO country code
+# Source: pr.nba.com/international-players-2025-26-nba-rosters/
+_PLAYER_COUNTRY = {
+    "Dyson Daniels": "au", "Josh Green": "au", "Josh Giddey": "au",
+    "Lachlan Olbrich": "au", "Luke Travers": "au", "Tyrese Proctor": "au",
+    "Dante Exum": "au", "Kyrie Irving": "au", "Alex Toohey": "au",
+    "Johnny Furphy": "au", "Jock Landale": "au", "Joe Ingles": "au",
+    "Rocco Zikarsky": "au", "Jakob Poeltl": "at",
+    "Buddy Hield": "bs", "Deandre Ayton": "bs", "VJ Edgecombe": "bs",
+    "Ajay Mitchell": "be", "Toumani Camara": "be",
+    "Jusuf Nurkic": "ba", "Gui Santos": "br",
+    "Pascal Siakam": "cm", "Christian Koloko": "cm",
+    "Yves Missi": "cm", "Joel Embiid": "cm",
+    "Caleb Houstan": "ca", "Nickeil Alexander-Walker": "ca",
+    "Emanuel Miller": "ca", "Dwight Powell": "ca", "Ryan Nembhard": "ca",
+    "Jamal Murray": "ca", "Jackson Rowe": "ca", "Andrew Nembhard": "ca",
+    "Bennedict Mathurin": "ca", "Brandon Clarke": "ca",
+    "Olivier-Maxence Prosper": "ca", "Zach Edey": "ca",
+    "Andrew Wiggins": "ca", "Leonard Miller": "ca",
+    "Luguentz Dort": "ca", "Dillon Brooks": "ca",
+    "Shaedon Sharpe": "ca", "Kelly Olynyk": "ca",
+    "RJ Barrett": "ca", "AJ Lawson": "ca", "Will Riley": "ca",
+    "Jahmyl Telfort": "ca", "Shai Gilgeous-Alexander": "ca",
+    "Yang Hansen": "cn",
+    "Karlo Matkovic": "hr", "Ivica Zubac": "hr", "Dario Saric": "hr",
+    "Vit Krejci": "cz",
+    "Jonathan Kuminga": "cd", "Bismack Biyombo": "cd", "Oscar Tshiebwe": "cd",
+    "Al Horford": "do", "David Jones Garcia": "do",
+    "Lauri Markkanen": "fi",
+    "Zaccharie Risacher": "fr", "Nolan Traore": "fr",
+    "Tidjane Salaun": "fr", "Moussa Diabate": "fr",
+    "Noa Essengue": "fr", "Nicolas Batum": "fr",
+    "Joan Beringer": "fr", "Rudy Gobert": "fr",
+    "Guerschon Yabusele": "fr", "Mohamed Diawara": "fr",
+    "Pacome Dadiet": "fr", "Ousmane Dieng": "fr",
+    "Rayan Rupert": "fr", "Sidy Cissoko": "fr", "Maxime Raynaud": "fr",
+    "Victor Wembanyama": "fr", "Alex Sarr": "fr", "Alexandre Sarr": "fr",
+    "Bilal Coulibaly": "fr", "Noah Penda": "fr",
+    "Goga Bitadze": "ge", "Sandro Mamukelashvili": "ge",
+    "Maxi Kleber": "de", "Ariel Hukporti": "de",
+    "Isaiah Hartenstein": "de", "Tristan da Silva": "de",
+    "Dennis Schroder": "de", "Franz Wagner": "de", "Moritz Wagner": "de",
+    "Giannis Antetokounmpo": "gr", "Thanasis Antetokounmpo": "gr",
+    "Alex Antetokounmpo": "gr",
+    "Moussa Cisse": "gn",
+    "Ben Saraf": "il", "Deni Avdija": "il",
+    "Simone Fontecchio": "it", "Nick Richards": "jm", "Rui Hachimura": "jp",
+    "Kristaps Porzingis": "lv",
+    "Jonas Valanciunas": "lt", "Kasparas Jakucionis": "lt",
+    "Domantas Sabonis": "lt",
+    "N'Faly Dante": "ml", "Nikola Vucevic": "me", "Quinten Post": "nl",
+    "Steven Adams": "nz", "Adem Bona": "ng", "Josh Okogie": "ng",
+    "Neemias Queta": "pt", "Egor Demin": "ru", "Vladislav Goldin": "ru",
+    "Eli Ndiaye": "sn", "Mouhamed Gueye": "sn",
+    "Nikola Jokic": "rs", "Bogdan Bogdanovic": "rs", "Nikola Jovic": "rs",
+    "Nikola Topic": "rs", "Tristan Vukcevic": "rs", "Nikola Djurisic": "rs",
+    "Luka Doncic": "si",
+    "Khaman Maluach": "ss", "Duop Reath": "ss",
+    "Hugo Gonzalez": "es", "Santi Aldama": "es",
+    "Chris Boucher": "lc",
+    "Bobi Klintman": "se", "Pelle Larsson": "se",
+    "Clint Capela": "ch", "Yanic Konan Niederhauser": "ch", "Kyshawn George": "ch",
+    "Alperen Sengun": "tr",
+    "Svi Mykhailiuk": "ua", "Max Shulga": "ua",
+    "Amari Williams": "gb", "OG Anunoby": "gb",
+    "Tosan Evbuomwan": "gb", "Jeremy Sochan": "gb",
 }
 
 
-def _parse_streak(row, col):
-    """Parse current streak from standings data."""
-    try:
-        # strCurrentStreak is like "W 3" or "L 2"
-        if "strCurrentStreak" in col:
-            val = row[col["strCurrentStreak"]]
-            if val and isinstance(val, str):
-                return val.replace(" ", "")  # "W 3" -> "W3"
-        # CurrentStreak is a number: positive=wins, negative=losses
-        if "CurrentStreak" in col:
-            val = int(row[col["CurrentStreak"]] or 0)
-            return f"{'W' if val >= 0 else 'L'}{abs(val)}"
-    except Exception:
-        pass
-    return "—"
+def fetch_salaries():
+    """Fetch player salary data from HoopsHype Google Sheet, grouped by team."""
+    global last_good_salaries
 
+    if "salaries" in salaries_cache:
+        return salaries_cache["salaries"]
 
-def _parse_last10(row, col):
-    """Parse last 10 games record from standings data."""
-    try:
-        if "L10_WINS" in col and "L10_LOSSES" in col:
-            return f"{int(row[col['L10_WINS']])}-{int(row[col['L10_LOSSES']])}"
-        if "Record_Last_10" in col:
-            return str(row[col["Record_Last_10"]])
-    except Exception:
-        pass
-    return "—"
-
-
-def fetch_rankings():
-    """Fetch NBA conference standings from stats.nba.com."""
-    global last_good_rankings
-
-    if "rankings" in rankings_cache:
-        return rankings_cache["rankings"]
-
-    log.info("Fetching NBA standings from stats.nba.com...")
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_SALARIES_SHEET_ID}"
+        f"/export?format=csv&gid={_SALARIES_GID}"
+    )
+    log.info("Fetching team salaries from Google Sheet...")
 
     try:
-        resp = requests.get(_STANDINGS_URL, headers=_STANDINGS_HEADERS, timeout=15)
+        resp = requests.get(csv_url, timeout=15)
         resp.raise_for_status()
-        data = resp.json()
+        resp.encoding = 'utf-8'
+    except Exception as e:
+        log.warning(f"Salaries fetch failed: {e}")
+        return last_good_salaries
 
-        result_set = data.get("resultSets", [{}])[0]
-        headers = result_set.get("headers", [])
-        rows = result_set.get("rowSet", [])
+    def parse_money(val):
+        try:
+            clean = val.replace("$", "").replace(",", "").replace('"', '').strip()
+            if not clean or clean == '-':
+                return 0
+            return int(clean)
+        except (ValueError, AttributeError):
+            return 0
 
-        # Build column index map
-        col = {h: i for i, h in enumerate(headers)}
+    reader = csv.reader(io.StringIO(resp.text))
+    teams_dict = {}
 
-        east = []
-        west = []
+    for row_num, row in enumerate(reader):
+        if row_num == 0:
+            continue
+        if len(row) < 6:
+            continue
+        player = row[0].strip()
+        team = row[2].strip()
+        if not player or not team:
+            continue
 
-        for row in rows:
-            conf = row[col.get("Conference", 0)] if "Conference" in col else ""
-            team = {
-                "rank": row[col["PlayoffRank"]] if "PlayoffRank" in col else 0,
-                "teamName": row[col["TeamName"]] if "TeamName" in col else "",
-                "teamAbbr": row[col["TeamSlug"]] if "TeamSlug" in col else (row[col.get("TeamAbbreviation", 0)] if "TeamAbbreviation" in col else ""),
-                "teamId": row[col["TeamID"]] if "TeamID" in col else 0,
-                "wins": row[col["WINS"]] if "WINS" in col else 0,
-                "losses": row[col["LOSSES"]] if "LOSSES" in col else 0,
-                "winPct": round(row[col["WinPCT"]] if "WinPCT" in col else 0, 3),
-                "gamesBehind": row[col["ConferenceGamesBack"]] if "ConferenceGamesBack" in col else 0,
-                "streak": _parse_streak(row, col),
-                "last10": _parse_last10(row, col),
+        salary = parse_money(row[3])
+        status = row[5].strip() if len(row) > 5 else ""
+        salary_next = parse_money(row[6]) if len(row) > 6 else 0
+        salary_next_display = row[6].strip() if len(row) > 6 else ""
+        cap_space = row[10].strip() if len(row) > 10 else ""
+        team_status = row[9].strip() if len(row) > 9 else ""
+        country = _PLAYER_COUNTRY.get(player, "")
+
+        if team not in teams_dict:
+            teams_dict[team] = {
+                "team": team, "players": [], "total": 0, "totalNext": 0,
+                "capSpace": cap_space, "teamStatus": team_status,
             }
 
-            if conf.lower() == "east":
-                east.append(team)
-            elif conf.lower() == "west":
-                west.append(team)
+        teams_dict[team]["players"].append({
+            "name": player, "salary": salary,
+            "salaryDisplay": row[3].strip(),
+            "salaryNextDisplay": salary_next_display,
+            "status": status, "country": country,
+        })
+        teams_dict[team]["total"] += salary
+        teams_dict[team]["totalNext"] += salary_next
 
-        east.sort(key=lambda t: t["rank"])
-        west.sort(key=lambda t: t["rank"])
+    teams_list = list(teams_dict.values())
+    teams_list.sort(key=lambda t: t["total"], reverse=True)
+    for i, t in enumerate(teams_list):
+        t["rank"] = i + 1
+        t["totalDisplay"] = f"${t['total']:,}"
+        t["totalNextDisplay"] = f"${t['totalNext']:,}"
+        t["playerCount"] = len(t["players"])
+        t["players"].sort(key=lambda p: p["salary"], reverse=True)
 
-        result = {
-            "standings_east": east,
-            "standings_west": west,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
+    result = {
+        "rankings": [{
+            "rank": t["rank"], "team": t["team"],
+            "totalDisplay": t["totalDisplay"],
+            "totalNextDisplay": t["totalNextDisplay"],
+            "capSpace": t["capSpace"], "teamStatus": t["teamStatus"],
+            "playerCount": t["playerCount"],
+        } for t in teams_list],
+        "teams": {t["team"]: {
+            "team": t["team"], "rank": t["rank"],
+            "totalDisplay": t["totalDisplay"],
+            "totalNextDisplay": t["totalNextDisplay"],
+            "capSpace": t["capSpace"], "teamStatus": t["teamStatus"],
+            "players": t["players"],
+        } for t in teams_list},
+        "count": len(teams_list),
+    }
 
-        rankings_cache["rankings"] = result
-        last_good_rankings = result
-        log.info(f"Cached standings: {len(east)} East, {len(west)} West teams")
-        return result
+    if teams_list:
+        salaries_cache["salaries"] = result
+        last_good_salaries = result
+        log.info(f"Cached {len(teams_list)} teams' salaries (highest: {teams_list[0]['team']} {teams_list[0]['totalDisplay']})")
 
-    except Exception as e:
-        log.warning(f"Standings fetch failed: {e}")
-        if last_good_rankings:
-            return last_good_rankings
-        return {"standings_east": [], "standings_west": [], "updated_at": ""}
+    return result
 
-
-# ═══════════════════════════════════════
-# API ROUTES
-# ═══════════════════════════════════════
 
 @app.route("/")
 def serve_index():
@@ -875,11 +941,13 @@ def api_scores():
     })
 
 
-@app.route("/api/rankings")
-def api_rankings():
-    """Return NBA conference standings."""
-    data = fetch_rankings()
-    return jsonify(data)
+@app.route("/api/salaries")
+def api_salaries():
+    """Return team salary rankings and per-team breakdowns."""
+    data = fetch_salaries()
+    if isinstance(data, dict):
+        return jsonify(data)
+    return jsonify({"rankings": [], "teams": {}, "count": 0})
 
 
 @app.route("/api/debug/boxscore")
@@ -964,10 +1032,6 @@ def api_status():
                 "cached": "scores" in scores_cache,
                 "last_count": len(last_good_scores),
             },
-            "rankings": {
-                "cached": "rankings" in rankings_cache,
-                "has_data": bool(last_good_rankings),
-            },
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
@@ -1000,9 +1064,9 @@ def _prewarm_caches():
         log.warning(f"Pre-warm scores failed: {e}")
 
     try:
-        fetch_rankings()
+        fetch_salaries()
     except Exception as e:
-        log.warning(f"Pre-warm rankings failed: {e}")
+        log.warning(f"Pre-warm salaries failed: {e}")
 
     log.info("Cache pre-warm complete")
 

@@ -180,7 +180,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .next-game-item{display:flex;align-items:center;gap:var(--sp-2);padding:var(--sp-1) var(--sp-3);background:var(--bg-surface);border-radius:var(--radius-sm);white-space:nowrap;font-size:13px}
 .next-game-teams{font-family:var(--font-display);font-weight:600}
 .next-game-time{font-family:var(--font-mono);font-size:12px;color:var(--text-tertiary)}
-.rankings-panel{flex:1;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-lg);padding:var(--sp-6);position:relative;overflow:hidden;animation:fadeSlideIn 0.5s ease-out}
+.rankings-panel{flex:1;background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-lg);padding:var(--sp-6);position:relative;overflow:hidden;animation:fadeSlideIn 0.5s ease-out;display:flex;flex-direction:column}
 .rankings-panel::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),transparent);opacity:0.6}
 @keyframes fadeSlideIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 .rankings-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-5)}
@@ -199,6 +199,25 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .rank-player{font-family:var(--font-display);font-weight:600}
 .rank-team{font-family:var(--font-body);font-size:12px;color:var(--text-tertiary);margin-left:var(--sp-2)}
 .rank-value{font-family:var(--font-mono);font-weight:500}
+/* Salary table styles */
+.sal-table-wrap{flex:1;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;-ms-overflow-style:none}
+.sal-table-wrap::-webkit-scrollbar{display:none}
+.sal-table{width:100%;border-collapse:collapse;table-layout:fixed}
+.sal-th-player{width:210px}
+.sal-th-salary{width:140px}
+.sal-th-bar{width:auto}
+.sal-th-status{width:120px}
+.sal-table thead th{font-family:var(--font-display);font-weight:600;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-tertiary);text-align:left;padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--border-medium);background:var(--bg-panel)}
+.sal-table tbody tr{border-bottom:1px solid rgba(255,255,255,0.02)}
+.sal-table tbody tr:nth-child(odd){background:var(--bg-row-odd)}
+.sal-player{font-family:var(--font-body);font-weight:500;font-size:13px;color:var(--text-primary);padding:3px var(--sp-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sal-flag{vertical-align:middle;margin-left:5px;display:inline-block;border-radius:1px}
+.sal-salary-stack{padding:2px var(--sp-3);white-space:nowrap}
+.sal-current{font-family:var(--font-mono);font-weight:600;font-size:13px;color:var(--accent-bright);line-height:1.3}
+.sal-next-yr{font-family:var(--font-mono);font-weight:400;font-size:11px;color:var(--text-tertiary);line-height:1.3}
+.sal-bar-cell{padding:3px var(--sp-2)}
+.sal-bar{height:14px;background:linear-gradient(90deg,rgba(255,140,0,0.5),rgba(255,140,0,0.2));border-radius:2px;min-width:2%}
+.sal-status{font-family:var(--font-body);font-size:11px;color:var(--text-secondary);text-align:right;padding:3px var(--sp-3);white-space:nowrap}
 
 /* ═══ SIDEBAR ═══ */
 .sidebar{grid-area:sidebar;display:flex;flex-direction:column;padding:var(--sp-4) var(--sp-3) var(--sp-3) 0;gap:var(--sp-3);overflow:hidden}
@@ -361,11 +380,52 @@ const MOCK_GAMES=[
 
 const MOCK_NEXT_GAMES=[{away:'OKC',home:'MIN',time:'Tomorrow 8:00 PM ET'},{away:'CLE',home:'BOS',time:'Tomorrow 7:30 PM ET'},{away:'DAL',home:'LAC',time:'Tomorrow 10:00 PM ET'},{away:'SAC',home:'HOU',time:'Wed 8:30 PM ET'}];
 
-const MOCK_RANKINGS=[
-  {title:'Trade Value Rankings 2025',source:'HoopsHype',columns:['Rank','Player','Team','Trade Value'],data:[[1,'Luka Doncic','DAL','$210M'],[2,'Shai Gilgeous-Alexander','OKC','$205M'],[3,'Jayson Tatum','BOS','$198M'],[4,'Nikola Jokic','DEN','$195M'],[5,'Anthony Edwards','MIN','$190M'],[6,'Giannis Antetokounmpo','MIL','$185M'],[7,'Victor Wembanyama','SAS','$180M'],[8,'Tyrese Haliburton','IND','$165M'],[9,'Ja Morant','MEM','$158M'],[10,'LaMelo Ball','CHA','$150M']]},
-  {title:'NBA Salary Rankings 2024-25',source:'HoopsHype',columns:['Rank','Player','Team','Salary'],data:[[1,'Stephen Curry','GSW','$55.8M'],[2,'Nikola Jokic','DEN','$51.4M'],[3,'Joel Embiid','PHI','$51.4M'],[4,'Kevin Durant','PHX','$51.2M'],[5,'Bradley Beal','PHX','$50.2M'],[6,'LeBron James','LAL','$48.7M'],[7,'Giannis Antetokounmpo','MIL','$48.8M'],[8,'Paul George','PHI','$49.2M'],[9,'Kawhi Leonard','LAC','$49.3M'],[10,'Jaylen Brown','BOS','$49.5M']]},
-  {title:'Points Per Game Leaders',source:'HoopsHype',columns:['Rank','Player','Team','PPG'],data:[[1,'Luka Doncic','DAL','34.2'],[2,'Shai Gilgeous-Alexander','OKC','31.8'],[3,'Giannis Antetokounmpo','MIL','31.4'],[4,'Joel Embiid','PHI','30.1'],[5,'Kevin Durant','PHX','28.5'],[6,'Jayson Tatum','BOS','27.9'],[7,'Anthony Edwards','MIN','27.2'],[8,"De'Aaron Fox",'SAC','26.8'],[9,'Donovan Mitchell','CLE','26.3'],[10,'LeBron James','LAL','25.8']]}
-];
+let salariesData=null;
+let rankingsScreens=[];
+function buildRankingsScreens(){
+  rankingsScreens=[];
+  if(!salariesData||!salariesData.rankings)return;
+  const r=salariesData.rankings;
+  // League-wide pages (15 per page)
+  const pg1=r.slice(0,15),pg2=r.slice(15,30);
+  if(pg1.length){rankingsScreens.push({title:'Team Salary Rankings 2025-26',source:'HoopsHype',columns:['Rank','Team','Total 25-26','Cap Space','Status'],data:pg1.map(t=>[t.rank,t.team,t.totalDisplay,t.capSpace,t.teamStatus])});}
+  if(pg2.length){rankingsScreens.push({title:'Team Salary Rankings 2025-26',source:'HoopsHype',columns:['Rank','Team','Total 25-26','Cap Space','Status'],data:pg2.map(t=>[t.rank,t.team,t.totalDisplay,t.capSpace,t.teamStatus])});}
+  // Team-by-team breakdown screens
+  if(salariesData.teams){
+    const teamNames=r.map(t=>t.team);
+    for(const name of teamNames){
+      const t=salariesData.teams[name];
+      if(!t||!t.players||t.players.length===0)continue;
+      const maxSal=Math.max(...t.players.map(p=>p.salary),1);
+      rankingsScreens.push({
+        title:`${name} — Roster Salaries`,
+        source:`Rank: #${t.rank} | 25-26: ${t.totalDisplay} | 26-27: ${t.totalNextDisplay} | Cap Space: ${t.capSpace}`,
+        columns:['Player','Salary','','Status'],
+        isTeam:true,
+        maxSalary:maxSal,
+        data:t.players.map(p=>({
+          name:p.name,
+          country:p.country||'',
+          sal:p.salaryDisplay,
+          salNext:p.salaryNextDisplay||'—',
+          salRaw:p.salary,
+          status:p.status
+        }))
+      });
+    }
+  }
+}
+function pollSalaries(){
+  fetch('/api/salaries').then(r=>r.json()).then(data=>{
+    if(data&&data.rankings&&data.rankings.length>0){
+      salariesData=data;
+      buildRankingsScreens();
+      console.log('Salaries loaded:',data.count,'teams,',rankingsScreens.length,'screens');
+    }
+  }).catch(e=>console.warn('Salaries fetch error:',e));
+}
+pollSalaries();
+setInterval(pollSalaries,30*60*1000);
 
 const MOCK_HEADLINES=[
   {text:'Lakers exploring trade options for additional wing depth ahead of deadline',isNew:true,time:'12m'},
@@ -425,28 +485,18 @@ function renderQuarters(game,prefix){
 // ═══ SCORE FLOW CHART (SVG) ═══
 function renderScoreFlow(g){
   const aQ=g.quarters.away,hQ=g.quarters.home;
-  // Count only quarters actually played
-  let played=0;
-  for(let i=0;i<aQ.length;i++){
-    if(aQ[i]===null||aQ[i]===undefined||hQ[i]===null||hQ[i]===undefined)break;
-    if(i>0&&aQ[i]===0&&hQ[i]===0)break;
-    played++;
-  }
-  if(played===0)return '';
   let aCum=[0],hCum=[0];
-  for(let i=0;i<played;i++){
-    aCum.push(aCum[aCum.length-1]+(aQ[i]||0));
-    hCum.push(hCum[hCum.length-1]+(hQ[i]||0));
+  for(let i=0;i<aQ.length;i++){
+    if(aQ[i]===null||hQ[i]===null)break;
+    aCum.push(aCum[aCum.length-1]+aQ[i]);
+    hCum.push(hCum[hCum.length-1]+hQ[i]);
   }
   if(aCum.length<=1)return '';
   const maxS=Math.max(...aCum,...hCum,1);
   const n=aCum.length;
-  const totalQ=Math.max(aQ.length,4);
   const W=480,H=72,padL=28,padR=32,padT=8,padB=16;
-  const fullPlotW=W-padL-padR;
-  const plotW=fullPlotW*(played/totalQ);
-  const plotH=H-padT-padB;
-  function x(i){return padL+(n>1?i/(n-1):0)*plotW;}
+  const plotW=W-padL-padR,plotH=H-padT-padB;
+  function x(i){return padL+i/(n-1)*plotW;}
   function y(v){return padT+plotH-v/maxS*plotH;}
   const aLine=aCum.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
   const hLine=hCum.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
@@ -697,7 +747,44 @@ function renderFeed(posts){
 }
 
 let currentRankingIndex=0;
-function renderRankings(r){const p=document.getElementById('rankingsPanel');p.style.animation='none';p.offsetHeight;p.style.animation='';const dots=MOCK_RANKINGS.map((_,i)=>`<div class="rankings-progress-dot ${i===currentRankingIndex?'active':''}"></div>`).join('');p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div><table class="rankings-table"><thead><tr>${r.columns.map(c=>`<th>${c}</th>`).join('')}</tr></thead><tbody>${r.data.map(row=>`<tr><td><span class="rank-num ${row[0]<=3?'top-3':''}">${row[0]}</span></td><td><span class="rank-player">${row[1]}</span><span class="rank-team">${row[2]}</span></td><td></td><td><span class="rank-value">${row[3]}</span></td></tr>`).join('')}</tbody></table>`;}
+function renderRankings(r){
+  const p=document.getElementById('rankingsPanel');
+  p.style.animation='none';p.offsetHeight;p.style.animation='';
+  const total=rankingsScreens.length||1;
+  const dots=total<=10
+    ?rankingsScreens.map((_,i)=>`<div class="rankings-progress-dot ${i===currentRankingIndex?'active':''}"></div>`).join('')
+    :`<span style="font-family:var(--font-mono);font-size:12px;color:var(--text-tertiary)">${currentRankingIndex+1} / ${total}</span>`;
+  if(r.isTeam){
+    const maxSal=r.maxSalary||1;
+    const rows=r.data.map(row=>{
+      const pct=Math.max(2,Math.round(row.salRaw/maxSal*100));
+      const flagHtml=row.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${row.country}.png" alt="" width="20" height="15">`:'';
+      return `<tr>
+        <td class="sal-player">${row.name}${flagHtml}</td>
+        <td class="sal-salary-stack"><div class="sal-current">${row.sal}</div><div class="sal-next-yr">${row.salNext}</div></td>
+        <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
+        <td class="sal-status">${row.status}</td>
+      </tr>`;
+    }).join('');
+    p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
+      <div class="sal-table-wrap"><table class="sal-table">
+        <thead><tr><th class="sal-th-player">PLAYER</th><th class="sal-th-salary">25-26 / 26-27</th><th class="sal-th-bar"></th><th class="sal-th-status">STATUS</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  } else {
+    const headerRow=r.columns.map(c=>`<th>${c}</th>`).join('');
+    const bodyRows=r.data.map(row=>{
+      const cells=row.map((val,ci)=>{
+        if(ci===0)return `<td><span class="rank-num ${val<=3?'top-3':''}">${val}</span></td>`;
+        if(ci===1)return `<td><span class="rank-player">${val}</span></td>`;
+        return `<td><span class="rank-value">${val}</span></td>`;
+      }).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('');
+    p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
+      <table class="rankings-table"><thead><tr>${headerRow}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+  }
+}
 let nextGamesPages=[];let currentNextGamesPage=0;
 function renderNextGames(games){
   const perPage=5;
@@ -713,10 +800,10 @@ function _showNextGamesPage(){
   container.innerHTML=nextGamesPages.map((pg,pi)=>`<div class="next-games-page${pi===currentNextGamesPage?' active':''}">${pg.map(g=>`<div class="next-game-item"><span class="next-game-teams">${g.away} @ ${g.home}</span><span class="next-game-time">${g.time}</span></div>`).join('')}</div>`).join('');
 }
 function rotateNextGames(){if(nextGamesPages.length<=1)return;currentNextGamesPage=(currentNextGamesPage+1)%nextGamesPages.length;_showNextGamesPage();}
-function rotateRankings(){currentRankingIndex=(currentRankingIndex+1)%MOCK_RANKINGS.length;renderRankings(MOCK_RANKINGS[currentRankingIndex]);}
+function rotateRankings(){if(rankingsScreens.length===0)return;currentRankingIndex=(currentRankingIndex+1)%rankingsScreens.length;renderRankings(rankingsScreens[currentRankingIndex]);}
 
 let currentMode=null;
-function setMode(mode){if(mode===currentMode)return;currentMode=mode;const fg=document.getElementById('featuredGame'),ms=document.getElementById('miniScores'),rm=document.getElementById('rankingsMode'),lb=document.getElementById('liveBadge');if(mode==='live'){fg.classList.remove('hidden');ms.classList.remove('hidden');rm.classList.remove('active');lb.style.display='flex';}else{fg.classList.add('hidden');ms.classList.add('hidden');rm.classList.add('active');lb.style.display='none';const scheduled=getGames().filter(g=>g.status==='scheduled');if(scheduled.length>0){renderNextGames(scheduled.map(g=>({away:g.away.abbr,home:g.home.abbr,time:g.clock||'TBD'})));}else{renderNextGames(MOCK_NEXT_GAMES);}renderRankings(MOCK_RANKINGS[currentRankingIndex]);}}
+function setMode(mode){if(mode===currentMode)return;currentMode=mode;const fg=document.getElementById('featuredGame'),ms=document.getElementById('miniScores'),rm=document.getElementById('rankingsMode'),lb=document.getElementById('liveBadge');if(mode==='live'){fg.classList.remove('hidden');ms.classList.remove('hidden');rm.classList.remove('active');lb.style.display='flex';}else{fg.classList.add('hidden');ms.classList.add('hidden');rm.classList.add('active');lb.style.display='none';const scheduled=getGames().filter(g=>g.status==='scheduled');if(scheduled.length>0){renderNextGames(scheduled.map(g=>({away:g.away.abbr,home:g.home.abbr,time:g.clock||'TBD'})));}else{renderNextGames(MOCK_NEXT_GAMES);}if(rankingsScreens.length>0){renderRankings(rankingsScreens[currentRankingIndex]);}}}
 // LIVE mode: from first tip-off until 6h after last game ends
 // Fallback: if all games scheduled, stay in rankings until first goes live
 // If all games final, stay live for 6 hours after (estimated via scheduled start + 8.5h)

@@ -903,6 +903,127 @@ def fetch_salaries():
     return result
 
 
+# ═══════════════════════════════════════
+# GLOBAL RATINGS (Google Sheets)
+# ═══════════════════════════════════════
+
+_RATINGS_SHEET_ID = "15sz5Quun4k86N-XEXvbXU9D5BrLg_26z7PtuH-T5bP8"
+_RATINGS_GID = "1342397740"
+
+ratings_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min
+last_good_ratings = []
+
+# Column blocks: (start_col, title, num_players)
+_RATINGS_BLOCKS = [
+    (3,  "Global Rating — Last 365 Days", 20),
+    (14, "Global Rating — Season", 20),
+    (25, "Global Rating — Rookies", 20),
+    (36, "Global Rating — International", 20),
+    (47, "Global Rating — Sixth Man of the Year", 20),
+    (58, "Global Rating — Last 7 Days", 20),
+    (80, "Global Rating — Last 30 Days", 20),
+    (91, "Global Rating — Most In Form", 20),
+]
+
+
+def fetch_ratings():
+    """Fetch Global Rating data from Google Sheet, returning ranking screens."""
+    global last_good_ratings
+
+    if "ratings" in ratings_cache:
+        return ratings_cache["ratings"]
+
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_RATINGS_SHEET_ID}"
+        f"/export?format=csv&gid={_RATINGS_GID}"
+    )
+    log.info("Fetching Global Ratings from Google Sheet...")
+
+    try:
+        resp = requests.get(csv_url, timeout=30)
+        resp.raise_for_status()
+        resp.encoding = 'utf-8'
+    except Exception as e:
+        log.warning(f"Ratings fetch failed: {e}")
+        return last_good_ratings
+
+    reader = list(csv.reader(io.StringIO(resp.text)))
+    if len(reader) < 2:
+        return last_good_ratings
+
+    headers = reader[0]
+    screens = []
+
+    for start_col, title, num_players in _RATINGS_BLOCKS:
+        # Determine column layout
+        # Standard: PLAYER(+0), RAT(+1), G(+2), PTS(+3), REB(+4), AST(+5), extra(+6)
+        is_form = start_col == 91  # "Most In Form" has different layout: PLAYER, RAT, 2024-25, DIFF
+
+        players = []
+        for row_idx in range(1, len(reader)):
+            if len(players) >= num_players:
+                break
+            row = reader[row_idx]
+            if start_col >= len(row):
+                continue
+
+            name = row[start_col].strip() if start_col < len(row) else ""
+            if not name:
+                continue
+
+            rat = row[start_col + 1].strip() if start_col + 1 < len(row) else ""
+            country = _PLAYER_COUNTRY.get(name, "")
+
+            if is_form:
+                # Cols: PLAYER, RAT (current), 2024-25 (old), DIFF
+                old_rat = row[start_col + 2].strip() if start_col + 2 < len(row) else ""
+                diff = row[start_col + 3].strip() if start_col + 3 < len(row) else ""
+                players.append({
+                    "rank": len(players) + 1,
+                    "name": name,
+                    "rating": rat,
+                    "oldRating": old_rat,
+                    "diff": diff,
+                    "country": country,
+                })
+            else:
+                games = row[start_col + 2].strip() if start_col + 2 < len(row) else ""
+                pts = row[start_col + 3].strip() if start_col + 3 < len(row) else ""
+                reb = row[start_col + 4].strip() if start_col + 4 < len(row) else ""
+                ast = row[start_col + 5].strip() if start_col + 5 < len(row) else ""
+                players.append({
+                    "rank": len(players) + 1,
+                    "name": name,
+                    "rating": rat,
+                    "games": games,
+                    "pts": pts,
+                    "reb": reb,
+                    "ast": ast,
+                    "country": country,
+                })
+
+        if players:
+            screens.append({
+                "title": title,
+                "isForm": is_form,
+                "players": players,
+            })
+
+    if screens:
+        ratings_cache["ratings"] = screens
+        last_good_ratings = screens
+        log.info(f"Cached {len(screens)} rating screens")
+
+    return screens
+
+
+@app.route("/api/ratings")
+def api_ratings():
+    """Return Global Rating ranking screens."""
+    data = fetch_ratings()
+    return jsonify({"screens": data, "count": len(data)})
+
+
 @app.route("/")
 def serve_index():
     """Serve the broadcast overlay page."""
@@ -1067,6 +1188,11 @@ def _prewarm_caches():
         fetch_salaries()
     except Exception as e:
         log.warning(f"Pre-warm salaries failed: {e}")
+
+    try:
+        fetch_ratings()
+    except Exception as e:
+        log.warning(f"Pre-warm ratings failed: {e}")
 
     log.info("Cache pre-warm complete")
 

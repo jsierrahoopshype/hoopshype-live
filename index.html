@@ -218,6 +218,17 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .sal-bar-cell{padding:3px var(--sp-2)}
 .sal-bar{height:14px;background:linear-gradient(90deg,rgba(255,140,0,0.5),rgba(255,140,0,0.2));border-radius:2px;min-width:2%}
 .sal-status{font-family:var(--font-body);font-size:11px;color:var(--text-secondary);text-align:right;padding:3px var(--sp-3);white-space:nowrap}
+/* Rating table styles */
+.rat-th-rank{width:36px;text-align:center}
+.rat-th-player{width:200px}
+.rat-th-rat{width:60px}
+.rat-th-bar{width:auto}
+.rat-th-stat{width:55px;text-align:right}
+.rat-rank{text-align:center;padding:3px var(--sp-2)}
+.rat-val{font-family:var(--font-mono);font-weight:700;font-size:14px;color:var(--accent-bright);padding:3px var(--sp-3);white-space:nowrap}
+.rat-stat{font-family:var(--font-mono);font-weight:500;font-size:13px;color:var(--text-secondary);text-align:right;padding:3px var(--sp-3);white-space:nowrap}
+.rat-diff-up{color:#4ade80}
+.rat-diff-down{color:#f87171}
 
 /* ═══ SIDEBAR ═══ */
 .sidebar{grid-area:sidebar;display:flex;flex-direction:column;padding:var(--sp-4) var(--sp-3) var(--sp-3) 0;gap:var(--sp-3);overflow:hidden}
@@ -381,11 +392,13 @@ const MOCK_GAMES=[
 const MOCK_NEXT_GAMES=[{away:'OKC',home:'MIN',time:'Tomorrow 8:00 PM ET'},{away:'CLE',home:'BOS',time:'Tomorrow 7:30 PM ET'},{away:'DAL',home:'LAC',time:'Tomorrow 10:00 PM ET'},{away:'SAC',home:'HOU',time:'Wed 8:30 PM ET'}];
 
 let salariesData=null;
+let ratingsData=null;
 let rankingsScreens=[];
 function buildRankingsScreens(){
   rankingsScreens=[];
-  if(!salariesData||!salariesData.rankings)return;
-  const r=salariesData.rankings;
+  // Salary screens
+  if(salariesData&&salariesData.rankings){
+    const r=salariesData.rankings;
   // League-wide pages (15 per page)
   const pg1=r.slice(0,15),pg2=r.slice(15,30);
   if(pg1.length){rankingsScreens.push({title:'Team Salary Rankings 2025-26',source:'HoopsHype',columns:['Rank','Team','Total 25-26','Cap Space','Status'],data:pg1.map(t=>[t.rank,t.team,t.totalDisplay,t.capSpace,t.teamStatus])});}
@@ -414,6 +427,19 @@ function buildRankingsScreens(){
       });
     }
   }
+  }
+  // Global Rating screens (after salaries)
+  if(ratingsData&&ratingsData.screens){
+    for(const scr of ratingsData.screens){
+      rankingsScreens.push({
+        title:scr.title,
+        source:'HoopsHype Global Rating',
+        isRating:true,
+        isForm:scr.isForm||false,
+        data:scr.players
+      });
+    }
+  }
 }
 function pollSalaries(){
   fetch('/api/salaries').then(r=>r.json()).then(data=>{
@@ -424,8 +450,19 @@ function pollSalaries(){
     }
   }).catch(e=>console.warn('Salaries fetch error:',e));
 }
+function pollRatings(){
+  fetch('/api/ratings').then(r=>r.json()).then(data=>{
+    if(data&&data.screens&&data.screens.length>0){
+      ratingsData=data;
+      buildRankingsScreens();
+      console.log('Ratings loaded:',data.count,'screens, total:',rankingsScreens.length);
+    }
+  }).catch(e=>console.warn('Ratings fetch error:',e));
+}
 pollSalaries();
+pollRatings();
 setInterval(pollSalaries,30*60*1000);
+setInterval(pollRatings,30*60*1000);
 
 const MOCK_HEADLINES=[
   {text:'Lakers exploring trade options for additional wing depth ahead of deadline',isNew:true,time:'12m'},
@@ -769,6 +806,47 @@ function renderRankings(r){
     p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
       <div class="sal-table-wrap"><table class="sal-table">
         <thead><tr><th class="sal-th-player">PLAYER</th><th class="sal-th-salary">25-26 / 26-27</th><th class="sal-th-bar"></th><th class="sal-th-status">STATUS</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  } else if(r.isRating){
+    const maxRat=Math.max(...r.data.map(p=>parseFloat(p.rating)||0),1);
+    let thead,rows;
+    if(r.isForm){
+      thead=`<tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="rat-th-rat">RATING</th><th class="rat-th-bar"></th><th class="rat-th-stat">2024-25</th><th class="rat-th-stat">DIFF</th></tr>`;
+      rows=r.data.map(p=>{
+        const pct=Math.max(2,Math.round((parseFloat(p.rating)||0)/maxRat*100));
+        const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
+        const diffVal=parseFloat(p.diff)||0;
+        const diffCls=diffVal>0?'rat-diff-up':diffVal<0?'rat-diff-down':'';
+        const diffPrefix=diffVal>0?'+':'';
+        return `<tr>
+          <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
+          <td class="sal-player">${p.name}${flagHtml}</td>
+          <td class="rat-val">${p.rating}</td>
+          <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
+          <td class="rat-stat">${p.oldRating}</td>
+          <td class="rat-stat ${diffCls}">${diffPrefix}${p.diff}</td>
+        </tr>`;
+      }).join('');
+    } else {
+      thead=`<tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="rat-th-rat">RAT</th><th class="rat-th-bar"></th><th class="rat-th-stat">PTS</th><th class="rat-th-stat">REB</th><th class="rat-th-stat">AST</th></tr>`;
+      rows=r.data.map(p=>{
+        const pct=Math.max(2,Math.round((parseFloat(p.rating)||0)/maxRat*100));
+        const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
+        return `<tr>
+          <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
+          <td class="sal-player">${p.name}${flagHtml}</td>
+          <td class="rat-val">${p.rating}</td>
+          <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
+          <td class="rat-stat">${p.pts}</td>
+          <td class="rat-stat">${p.reb}</td>
+          <td class="rat-stat">${p.ast}</td>
+        </tr>`;
+      }).join('');
+    }
+    p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
+      <div class="sal-table-wrap"><table class="sal-table">
+        <thead>${thead}</thead>
         <tbody>${rows}</tbody>
       </table></div>`;
   } else {

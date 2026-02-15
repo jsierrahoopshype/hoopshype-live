@@ -220,15 +220,53 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .sal-status{font-family:var(--font-body);font-size:11px;color:var(--text-secondary);text-align:right;padding:3px var(--sp-3);white-space:nowrap}
 /* Rating table styles */
 .rat-th-rank{width:36px;text-align:center}
-.rat-th-player{width:200px}
+.rat-th-player{width:260px}
 .rat-th-rat{width:60px}
 .rat-th-bar{width:auto}
-.rat-th-stat{width:55px;text-align:right}
+.rat-th-stat{width:60px;text-align:right}
 .rat-rank{text-align:center;padding:3px var(--sp-2)}
 .rat-val{font-family:var(--font-mono);font-weight:700;font-size:14px;color:var(--accent-bright);padding:3px var(--sp-3);white-space:nowrap}
 .rat-stat{font-family:var(--font-mono);font-weight:500;font-size:13px;color:var(--text-secondary);text-align:right;padding:3px var(--sp-3);white-space:nowrap}
 .rat-diff-up{color:#4ade80}
 .rat-diff-down{color:#f87171}
+/* Injury report styles */
+.inj-two-col{display:flex;gap:var(--sp-4);flex:1;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}
+.inj-two-col::-webkit-scrollbar{display:none}
+.inj-two-col .inj-table{flex:1;min-width:0}
+.inj-table{width:100%;border-collapse:collapse}
+.inj-table thead th{font-family:var(--font-display);font-weight:600;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-tertiary);text-align:left;padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--border-medium)}
+.inj-table tbody tr{border-bottom:1px solid rgba(255,255,255,0.02);height:28px}
+.inj-table tbody tr:nth-child(odd){background:var(--bg-row-odd)}
+.inj-th-player{width:160px}
+.inj-th-status{width:100px}
+.inj-th-detail{}
+.inj-th-date{width:60px;text-align:right}
+.inj-team-header td{font-family:var(--font-display);font-weight:700;font-size:13px;color:var(--text-primary);padding:4px var(--sp-3) 2px;border-bottom:1px solid var(--border-medium);letter-spacing:0.5px;text-transform:uppercase}
+.inj-status{font-family:var(--font-display);font-weight:600;font-size:11px;padding:2px var(--sp-3);white-space:nowrap;text-transform:uppercase;letter-spacing:0.5px}
+.inj-out{color:#f87171}
+.inj-doubtful{color:#fb923c}
+.inj-quest{color:#fbbf24}
+.inj-prob{color:#4ade80}
+.inj-avail{color:var(--text-tertiary)}
+.inj-detail{font-family:var(--font-body);font-size:11px;color:var(--text-secondary);padding:2px var(--sp-3)}
+.inj-date{font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary);padding:2px var(--sp-3);white-space:nowrap;text-align:right}
+/* Depth chart styles */
+.dep-table{width:100%;border-collapse:collapse;table-layout:fixed}
+.dep-th-level{width:90px;font-family:var(--font-display);font-weight:600;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--text-tertiary);text-align:left;padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--border-medium)}
+.dep-th-pos{font-family:var(--font-display);font-weight:700;font-size:13px;color:var(--accent);text-align:center;padding:var(--sp-2) var(--sp-2);border-bottom:1px solid var(--border-medium)}
+.dep-level{font-family:var(--font-display);font-weight:600;font-size:11px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.5px;padding:8px var(--sp-3) 8px var(--sp-4);vertical-align:top;border-right:1px solid var(--border-subtle)}
+.dep-cell{text-align:center;padding:6px var(--sp-2);vertical-align:top;border-bottom:1px solid rgba(255,255,255,0.03)}
+.dep-cell.dep-empty{color:var(--text-muted)}
+.dep-row-starters{background:rgba(99,179,237,0.08)}
+.dep-row-starters .dep-level{color:var(--accent-bright)}
+.dep-row-starters .dep-name{color:#fff;font-weight:600}
+.dep-row-bench{background:var(--bg-row-odd)}
+.dep-row-out{background:rgba(248,113,113,0.06)}
+.dep-row-out .dep-level{color:#f87171}
+.dep-row-out .dep-name{color:var(--text-tertiary)}
+.dep-name{font-family:var(--font-body);font-weight:500;font-size:13px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dep-sal{font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary);margin-top:2px}
+.dep-team-header td{font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--text-primary);padding:10px var(--sp-3) 4px;border-bottom:1px solid var(--border-medium);letter-spacing:0.5px;text-transform:uppercase}
 
 /* ═══ SIDEBAR ═══ */
 .sidebar{grid-area:sidebar;display:flex;flex-direction:column;padding:var(--sp-4) var(--sp-3) var(--sp-3) 0;gap:var(--sp-3);overflow:hidden}
@@ -393,9 +431,60 @@ const MOCK_NEXT_GAMES=[{away:'OKC',home:'MIN',time:'Tomorrow 8:00 PM ET'},{away:
 
 let salariesData=null;
 let ratingsData=null;
+let injuriesData=null;
+let depthData=null;
+let teamRatingsData=null;
 let rankingsScreens=[];
 function buildRankingsScreens(){
   rankingsScreens=[];
+  // Team Rating screens (first)
+  if(teamRatingsData&&teamRatingsData.screens){
+    for(const scr of teamRatingsData.screens){
+      rankingsScreens.push({
+        title:'Global Rating — '+scr.title,
+        source:scr.subtitle,
+        isRating:true,
+        isForm:false,
+        data:scr.players
+      });
+    }
+  }
+  // Depth chart screens
+  if(depthData&&depthData.screens){
+    for(const scr of depthData.screens){
+      rankingsScreens.push({
+        title:'Depth Charts',
+        source:'HoopsHype Depth Chart',
+        isDepth:true,
+        data:scr.teams
+      });
+    }
+  }
+  // Injury report screens
+  if(injuriesData&&injuriesData.screens){
+    const ts=injuriesData.lastUpdated||'';
+    for(const scr of injuriesData.screens){
+      rankingsScreens.push({
+        title:'Injury Report',
+        source:'HoopsHype'+(ts?' — Last updated '+ts:''),
+        isInjury:true,
+        left:scr.left,
+        right:scr.right
+      });
+    }
+  }
+  // Global Rating screens
+  if(ratingsData&&ratingsData.screens){
+    for(const scr of ratingsData.screens){
+      rankingsScreens.push({
+        title:scr.title,
+        source:'HoopsHype Global Rating',
+        isRating:true,
+        isForm:scr.isForm||false,
+        data:scr.players
+      });
+    }
+  }
   // Salary screens
   if(salariesData&&salariesData.rankings){
     const r=salariesData.rankings;
@@ -428,18 +517,6 @@ function buildRankingsScreens(){
     }
   }
   }
-  // Global Rating screens (after salaries)
-  if(ratingsData&&ratingsData.screens){
-    for(const scr of ratingsData.screens){
-      rankingsScreens.push({
-        title:scr.title,
-        source:'HoopsHype Global Rating',
-        isRating:true,
-        isForm:scr.isForm||false,
-        data:scr.players
-      });
-    }
-  }
 }
 function pollSalaries(){
   fetch('/api/salaries').then(r=>r.json()).then(data=>{
@@ -459,10 +536,43 @@ function pollRatings(){
     }
   }).catch(e=>console.warn('Ratings fetch error:',e));
 }
+function pollInjuries(){
+  fetch('/api/injuries').then(r=>r.json()).then(data=>{
+    if(data&&data.screens&&data.screens.length>0){
+      injuriesData=data;
+      buildRankingsScreens();
+      console.log('Injuries loaded:',data.count,'screens, total:',rankingsScreens.length);
+    }
+  }).catch(e=>console.warn('Injuries fetch error:',e));
+}
+function pollDepth(){
+  fetch('/api/depth').then(r=>r.json()).then(data=>{
+    if(data&&data.screens&&data.screens.length>0){
+      depthData=data;
+      buildRankingsScreens();
+      console.log('Depth charts loaded:',data.count,'screens, total:',rankingsScreens.length);
+    }
+  }).catch(e=>console.warn('Depth fetch error:',e));
+}
+function pollTeamRatings(){
+  fetch('/api/team_ratings').then(r=>r.json()).then(data=>{
+    if(data&&data.screens&&data.screens.length>0){
+      teamRatingsData=data;
+      buildRankingsScreens();
+      console.log('Team ratings loaded:',data.count,'screens, total:',rankingsScreens.length);
+    }
+  }).catch(e=>console.warn('Team ratings fetch error:',e));
+}
 pollSalaries();
 pollRatings();
+pollInjuries();
+pollDepth();
+pollTeamRatings();
 setInterval(pollSalaries,30*60*1000);
 setInterval(pollRatings,30*60*1000);
+setInterval(pollInjuries,15*60*1000);
+setInterval(pollDepth,30*60*1000);
+setInterval(pollTeamRatings,30*60*1000);
 
 const MOCK_HEADLINES=[
   {text:'Lakers exploring trade options for additional wing depth ahead of deadline',isNew:true,time:'12m'},
@@ -848,6 +958,53 @@ function renderRankings(r){
       <div class="sal-table-wrap"><table class="sal-table">
         <thead>${thead}</thead>
         <tbody>${rows}</tbody>
+      </table></div>`;
+  } else if(r.isInjury){
+    function injCol(items){
+      if(!items||items.length===0)return '';
+      const rows=items.map(p=>{
+        if(p.isHeader) return `<tr class="inj-team-header"><td colspan="4">${p.team}</td></tr>`;
+        const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
+        const st=p.status||'';
+        const stLower=st.toLowerCase();
+        const stCls=stLower==='out'?'inj-out':stLower==='doubtful'?'inj-doubtful':stLower==='questionable'?'inj-quest':stLower==='probable'?'inj-prob':stLower==='available'?'inj-avail':'';
+        return `<tr>
+          <td class="sal-player">${p.name}${flagHtml}</td>
+          <td class="inj-status ${stCls}">${st}</td>
+          <td class="inj-detail">${p.injury||''}</td>
+          <td class="inj-date">${p.date||''}</td>
+        </tr>`;
+      }).join('');
+      return `<table class="inj-table"><thead><tr><th class="inj-th-player">PLAYER</th><th class="inj-th-status">STATUS</th><th class="inj-th-detail">INJURY</th><th class="inj-th-date">DATE</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+    const leftHtml=injCol(r.left);
+    const rightHtml=injCol(r.right);
+    p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
+      <div class="inj-two-col">${leftHtml}${rightHtml}</div>`;
+  } else if(r.isDepth){
+    const posLabels=['PG','SG','SF','PF','C'];
+    let allRows='';
+    for(const team of r.data){
+      // Team header row
+      allRows+=`<tr class="dep-team-header"><td colspan="6">${team.name}</td></tr>`;
+      for(const level of team.levels){
+        const rowCls=level.label==='Starters'?'dep-row-starters':level.label==='Bench'?'dep-row-bench':'dep-row-out';
+        const cells=posLabels.map(pos=>{
+          const p=level.players.find(x=>x.pos===pos);
+          if(!p)return `<td class="dep-cell dep-empty">—</td>`;
+          const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
+          return `<td class="dep-cell">
+            <div class="dep-name">${p.name}${flagHtml}</div>
+            <div class="dep-sal">${p.salary||''}</div>
+          </td>`;
+        }).join('');
+        allRows+=`<tr class="${rowCls}"><td class="dep-level">${level.label}</td>${cells}</tr>`;
+      }
+    }
+    p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
+      <div class="sal-table-wrap"><table class="dep-table">
+        <thead><tr><th class="dep-th-level"></th>${posLabels.map(p=>`<th class="dep-th-pos">${p}</th>`).join('')}</tr></thead>
+        <tbody>${allRows}</tbody>
       </table></div>`;
   } else {
     const headerRow=r.columns.map(c=>`<th>${c}</th>`).join('');

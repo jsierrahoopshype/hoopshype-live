@@ -47,6 +47,11 @@ last_good_headlines = []
 last_good_scores = []
 last_good_salaries = {"rankings": [], "teams": {}, "count": 0}
 
+# Cross-reference lookups (populated by fetch_salaries / fetch_depth)
+_player_salary_map = {}   # "LeBron James" → "$46.7M"
+_full_name_map = {}       # "L. James" → "LeBron James", etc.
+_player_team_map = {}     # "LeBron James" → "Los Angeles Lakers" (from depth charts)
+
 # HTTP request defaults (no shared Session — requests.Session is NOT thread-safe
 # and we call from 20+ concurrent ThreadPoolExecutor workers)
 _HTTP_HEADERS = {"User-Agent": "HoopsHypeLive/1.0"}
@@ -211,6 +216,7 @@ def fetch_headlines():
     try:
         resp = requests.get(csv_url, timeout=15)
         resp.raise_for_status()
+        resp.encoding = 'utf-8'
     except Exception as e:
         log.warning(f"Google Sheets headlines fetch failed: {e}")
         return last_good_headlines
@@ -224,6 +230,9 @@ def fetch_headlines():
         if len(row) <= col_index:
             continue
         text = row[col_index].strip()
+        # Clean encoding artifacts (Â, non-breaking spaces, etc.)
+        text = text.replace('\u00a0', ' ').replace('\u00c2', '').replace('\xc2', '')
+        text = ' '.join(text.split())  # collapse multiple spaces
         if not text:
             continue
         # Skip header row (first row if it looks like a label)
@@ -868,6 +877,15 @@ def fetch_salaries():
         teams_dict[team]["total"] += salary
         teams_dict[team]["totalNext"] += salary_next
 
+        # Build cross-reference lookups
+        sal_display = row[3].strip()
+        _player_salary_map[player] = sal_display
+        # Build abbreviated → full name map ("N. Alexander-Walker" → "Nickeil Alexander-Walker")
+        parts = player.split(" ", 1)
+        if len(parts) == 2 and len(parts[0]) > 0:
+            abbr = parts[0][0] + ". " + parts[1]
+            _full_name_map[abbr] = player
+
     teams_list = list(teams_dict.values())
     teams_list.sort(key=lambda t: t["total"], reverse=True)
     for i, t in enumerate(teams_list):
@@ -1021,6 +1039,419 @@ def fetch_ratings():
 def api_ratings():
     """Return Global Rating ranking screens."""
     data = fetch_ratings()
+    return jsonify({"screens": data, "count": len(data)})
+
+
+# ═══════════════════════════════════════
+# TEAM RATINGS (cross-ref Ratings + Depth Charts)
+# ═══════════════════════════════════════
+
+team_ratings_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min
+last_good_team_ratings = []
+
+
+def fetch_team_ratings():
+    """Fetch Season ratings, one screen per team with all rostered players."""
+    global last_good_team_ratings
+
+    if "tr" in team_ratings_cache:
+        return team_ratings_cache["tr"]
+
+    # Need depth chart data for player→team mapping
+    if not _player_team_map:
+        log.warning("Team ratings: player_team_map not populated yet, skipping")
+        return last_good_team_ratings
+
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_RATINGS_SHEET_ID}"
+        f"/export?format=csv&gid={_RATINGS_GID}"
+    )
+    log.info("Fetching team ratings from Google Sheet...")
+
+    try:
+        resp = requests.get(csv_url, timeout=30)
+        resp.raise_for_status()
+        resp.encoding = 'utf-8'
+    except Exception as e:
+        log.warning(f"Team ratings fetch failed: {e}")
+        return last_good_team_ratings
+
+    reader = list(csv.reader(io.StringIO(resp.text)))
+    if len(reader) < 5:
+        return last_good_team_ratings
+
+    # Parse Season block (col 14): PLAYER, RAT, G, PTS, REB, AST
+    season_col = 14
+    rated_players = {}  # name → player dict
+    for ri in range(1, len(reader)):
+        row = reader[ri]
+        if season_col >= len(row):
+            continue
+        name = row[season_col].strip()
+        if not name:
+            break
+        try:
+            rat = float(row[season_col + 1].strip())
+        except (ValueError, IndexError):
+            continue
+
+        games = row[season_col + 2].strip() if season_col + 2 < len(row) else ""
+        pts = row[season_col + 3].strip() if season_col + 3 < len(row) else ""
+        reb = row[season_col + 4].strip() if season_col + 4 < len(row) else ""
+        ast = row[season_col + 5].strip() if season_col + 5 < len(row) else ""
+
+        rated_players[name] = {
+            "rating": rat,
+            "games": games,
+            "pts": pts,
+            "reb": reb,
+            "ast": ast,
+        }
+
+    # Build team screens using depth chart rosters
+    teams = {}
+    for player_name, team_name in _player_team_map.items():
+        if team_name not in teams:
+            teams[team_name] = []
+        rp = rated_players.get(player_name)
+        teams[team_name].append({
+            "rank": 0,  # will be set after sort
+            "name": player_name,
+            "rating": f"{rp['rating']:.2f}" if rp else "—",
+            "ratingNum": rp["rating"] if rp else 0,
+            "games": rp["games"] if rp else "",
+            "pts": rp["pts"] if rp else "",
+            "reb": rp["reb"] if rp else "",
+            "ast": rp["ast"] if rp else "",
+            "country": _PLAYER_COUNTRY.get(player_name, ""),
+        })
+
+    # Sort players within each team by rating desc, assign ranks
+    team_list = []
+    for team_name, players in teams.items():
+        players.sort(key=lambda x: x["ratingNum"], reverse=True)
+        for i, p in enumerate(players):
+            p["rank"] = i + 1
+        rated = [p for p in players if p["ratingNum"] > 0]
+        avg_rat = sum(p["ratingNum"] for p in rated) / len(rated) if rated else 0
+        team_list.append({
+            "name": team_name,
+            "avgRating": round(avg_rat, 2),
+            "avgDisplay": f"{avg_rat:.2f}",
+            "ratedCount": len(rated),
+            "players": players,
+        })
+
+    # Sort teams by avg rating desc, assign rank
+    team_list.sort(key=lambda t: t["avgRating"], reverse=True)
+    for i, t in enumerate(team_list):
+        t["rank"] = i + 1
+
+    # One screen per team
+    screens = []
+    for t in team_list:
+        screens.append({
+            "title": f"#{t['rank']} {t['name']}",
+            "subtitle": f"Team Avg: {t['avgDisplay']} ({t['ratedCount']} rated players)",
+            "isForm": False,
+            "players": t["players"],
+        })
+
+    if screens:
+        team_ratings_cache["tr"] = screens
+        last_good_team_ratings = screens
+        log.info(f"Cached {len(screens)} team rating screens ({len(rated_players)} rated players matched)")
+
+    return screens
+
+
+@app.route("/api/team_ratings")
+def api_team_ratings():
+    """Return team rating screens."""
+    data = fetch_team_ratings()
+    return jsonify({"screens": data, "count": len(data)})
+
+
+# ═══════════════════════════════════════
+# INJURY REPORTS (Google Sheets)
+# ═══════════════════════════════════════
+
+_INJURIES_SHEET_ID = "14TQPdQ9mDhHMMMQa5vcs0coL98ZloHORtYElDikKoWY"
+_INJURIES_GID = "306285159"
+
+injuries_cache = TTLCache(maxsize=1, ttl=900)  # 15 min
+last_good_injuries = []
+
+
+def fetch_injuries():
+    """Fetch injury report data from Google Sheet, grouped by team."""
+    global last_good_injuries
+
+    if "injuries" in injuries_cache:
+        return injuries_cache["injuries"]
+
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_INJURIES_SHEET_ID}"
+        f"/export?format=csv&gid={_INJURIES_GID}"
+    )
+    log.info("Fetching injury reports from Google Sheet...")
+
+    try:
+        resp = requests.get(csv_url, timeout=30)
+        resp.raise_for_status()
+        resp.encoding = 'utf-8'
+    except Exception as e:
+        log.warning(f"Injuries fetch failed: {e}")
+        return last_good_injuries
+
+    reader = list(csv.reader(io.StringIO(resp.text)))
+    if len(reader) < 2:
+        return last_good_injuries
+
+    # Cols 17-23: Team, Player, _, Status, Injury, Date, GameStatus
+    teams = {}  # team -> [players]
+    for row_idx in range(1, len(reader)):
+        row = reader[row_idx]
+        if len(row) < 24:
+            continue
+
+        team = row[17].strip()
+        player = row[18].strip()
+        status = row[20].strip()       # Out, Available
+        injury = row[21].strip()       # Injury description
+        date = row[22].strip()         # Date
+        game_status = row[23].strip()  # Out, Questionable, Probable
+
+        if not team or not player:
+            continue
+        # Skip fully healthy players
+        if not injury and status == "Available" and game_status == "Available":
+            continue
+        # Skip "Available" game status with no injury note
+        if game_status == "Available" and not injury:
+            continue
+
+        if team not in teams:
+            teams[team] = []
+
+        teams[team].append({
+            "name": player,
+            "status": game_status or status,
+            "injury": injury,
+            "date": date,
+            "salary": _player_salary_map.get(player, ""),
+            "country": _PLAYER_COUNTRY.get(player, ""),
+        })
+
+    # Build two-column screens: left and right columns, ~15 rows each
+    MAX_PER_COL = 14
+    # First build a flat list of team blocks (header + players)
+    team_blocks = []
+    for team_name in sorted(teams.keys()):
+        team_players = teams[team_name]
+        block = [{"isHeader": True, "team": team_name}]
+        for p in team_players:
+            block.append(p)
+        team_blocks.append(block)
+
+    # Pack into columns, then pair columns into screens
+    columns = []
+    current_col = []
+    current_rows = 0
+    for block in team_blocks:
+        needed = len(block)
+        if current_col and current_rows + needed > MAX_PER_COL:
+            columns.append(current_col)
+            current_col = []
+            current_rows = 0
+        current_col.extend(block)
+        current_rows += needed
+    if current_col:
+        columns.append(current_col)
+
+    # Pair columns into screens (left + right)
+    screens = []
+    for i in range(0, len(columns), 2):
+        left = columns[i]
+        right = columns[i + 1] if i + 1 < len(columns) else []
+        screens.append({
+            "title": "Injury Report",
+            "left": left,
+            "right": right,
+        })
+
+    if screens:
+        injuries_cache["injuries"] = screens
+        last_good_injuries = screens
+        total_injured = sum(1 for b in team_blocks for p in b if not p.get("isHeader"))
+        log.info(f"Cached {len(screens)} injury screens ({total_injured} players across {len(teams)} teams)")
+
+    return screens
+
+
+@app.route("/api/injuries")
+def api_injuries():
+    """Return injury report screens."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    data = fetch_injuries()
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    return jsonify({
+        "screens": data,
+        "count": len(data),
+        "lastUpdated": now_et.strftime("%b %d, %I:%M %p ET"),
+    })
+
+
+# ═══════════════════════════════════════
+# DEPTH CHARTS (Google Sheets)
+# ═══════════════════════════════════════
+
+_DEPTH_SHEET_ID = "14TQPdQ9mDhHMMMQa5vcs0coL98ZloHORtYElDikKoWY"
+_DEPTH_GID = "24771201"
+
+depth_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min
+last_good_depth = []
+
+_POSITIONS = ["PG", "SG", "SF", "PF", "C"]
+_MAX_LEVELS = 10  # effectively unlimited
+_TEAMS_PER_SCREEN = 2
+
+# Teams appear alphabetically in the depth chart sheet
+_NBA_TEAMS_ALPHA = [
+    "Atlanta Hawks", "Boston Celtics", "Brooklyn Nets", "Charlotte Hornets",
+    "Chicago Bulls", "Cleveland Cavaliers", "Dallas Mavericks", "Denver Nuggets",
+    "Detroit Pistons", "Golden State Warriors", "Houston Rockets", "Indiana Pacers",
+    "LA Clippers", "Los Angeles Lakers", "Memphis Grizzlies", "Miami Heat",
+    "Milwaukee Bucks", "Minnesota Timberwolves", "New Orleans Pelicans", "New York Knicks",
+    "Oklahoma City Thunder", "Orlando Magic", "Philadelphia 76ers", "Phoenix Suns",
+    "Portland Trail Blazers", "Sacramento Kings", "San Antonio Spurs", "Toronto Raptors",
+    "Utah Jazz", "Washington Wizards",
+]
+
+
+def fetch_depth():
+    """Fetch depth chart data from Google Sheet, packed 3 teams per screen."""
+    global last_good_depth
+
+    if "depth" in depth_cache:
+        return depth_cache["depth"]
+
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_DEPTH_SHEET_ID}"
+        f"/export?format=csv&gid={_DEPTH_GID}"
+    )
+    log.info("Fetching depth charts from Google Sheet...")
+
+    try:
+        resp = requests.get(csv_url, timeout=30)
+        resp.raise_for_status()
+        resp.encoding = 'utf-8'
+    except Exception as e:
+        log.warning(f"Depth charts fetch failed: {e}")
+        return last_good_depth
+
+    import re
+    reader = list(csv.reader(io.StringIO(resp.text)))
+    if len(reader) < 5:
+        return last_good_depth
+
+    # Find header rows (PG/SG/SF/PF/C) to delimit team blocks
+    header_rows = []
+    for ri, row in enumerate(reader):
+        if (len(row) >= 5 and
+            row[0].strip() == "PG" and row[1].strip() == "SG" and
+            row[2].strip() == "SF" and row[3].strip() == "PF" and
+            row[4].strip() == "C"):
+            header_rows.append(ri)
+
+    log.info(f"Depth charts: found {len(header_rows)} header rows, {len(_NBA_TEAMS_ALPHA)} teams expected")
+
+    all_teams = []
+    for hi, hrow in enumerate(header_rows):
+        if hi >= len(_NBA_TEAMS_ALPHA):
+            break
+        team_name = _NBA_TEAMS_ALPHA[hi]
+        end = header_rows[hi + 1] if hi + 1 < len(header_rows) else len(reader)
+
+        # Parse depth levels: pairs of (name_row, salary_row)
+        levels = []
+        ri = hrow + 1
+        while ri < end and len(levels) < _MAX_LEVELS:
+            row = reader[ri] if ri < len(reader) else []
+            if len(row) < 5:
+                ri += 1
+                continue
+            cols = [row[i].strip() if i < len(row) else "" for i in range(5)]
+            if not any(cols):
+                ri += 1
+                continue
+            # Detect position header rows (PG/SG/SF/PF/C) - fuzzy match
+            pos_set = {"PG", "SG", "SF", "PF", "C"}
+            if sum(1 for c in cols if c in pos_set) >= 3:
+                break
+
+            is_salary = any(c.startswith("$") for c in cols if c)
+            if not is_salary and any(cols):
+                names = cols
+                salaries = ["", "", "", "", ""]
+                if ri + 1 < end:
+                    next_row = reader[ri + 1] if ri + 1 < len(reader) else []
+                    next_cols = [next_row[j].strip() if j < len(next_row) else "" for j in range(5)]
+                    if any(c.startswith("$") for c in next_cols if c):
+                        salaries = next_cols
+                        ri += 1
+
+                level_idx = len(levels)
+                label = "Starters" if level_idx == 0 else "Bench" if level_idx == 1 else "Out"
+                level = {"label": label, "players": []}
+                for pi in range(5):
+                    if names[pi]:
+                        full_name = _full_name_map.get(names[pi], names[pi])
+                        level["players"].append({
+                            "pos": _POSITIONS[pi],
+                            "name": full_name,
+                            "salary": salaries[pi],
+                            "country": _PLAYER_COUNTRY.get(full_name, _PLAYER_COUNTRY.get(names[pi], "")),
+                        })
+                if level["players"]:
+                    levels.append(level)
+
+            ri += 1
+
+        if levels:
+            all_teams.append({"name": team_name, "levels": levels})
+
+    # Build player→team cross-reference for team ratings
+    _player_team_map.clear()
+    for t in all_teams:
+        for level in t["levels"]:
+            for p in level["players"]:
+                _player_team_map[p["name"]] = t["name"]
+    log.info(f"Depth charts: built player→team map with {len(_player_team_map)} players")
+
+    # Pack teams into screens
+    screens = []
+    for i in range(0, len(all_teams), _TEAMS_PER_SCREEN):
+        batch = all_teams[i:i + _TEAMS_PER_SCREEN]
+        screens.append({
+            "title": "Depth Charts",
+            "teamNames": [t["name"] for t in batch],
+            "teams": batch,
+        })
+
+    if screens:
+        depth_cache["depth"] = screens
+        last_good_depth = screens
+        log.info(f"Cached {len(all_teams)} teams into {len(screens)} depth chart screens")
+
+    return screens
+
+
+@app.route("/api/depth")
+def api_depth():
+    """Return depth chart screens (multiple teams per screen)."""
+    data = fetch_depth()
     return jsonify({"screens": data, "count": len(data)})
 
 
@@ -1193,6 +1624,21 @@ def _prewarm_caches():
         fetch_ratings()
     except Exception as e:
         log.warning(f"Pre-warm ratings failed: {e}")
+
+    try:
+        fetch_depth()
+    except Exception as e:
+        log.warning(f"Pre-warm depth charts failed: {e}")
+
+    try:
+        fetch_team_ratings()
+    except Exception as e:
+        log.warning(f"Pre-warm team ratings failed: {e}")
+
+    try:
+        fetch_injuries()
+    except Exception as e:
+        log.warning(f"Pre-warm injuries failed: {e}")
 
     log.info("Cache pre-warm complete")
 

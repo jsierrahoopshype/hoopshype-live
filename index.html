@@ -224,6 +224,9 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .sal-bar{height:14px;background:linear-gradient(90deg,rgba(255,140,0,0.5),rgba(255,140,0,0.2));border-radius:2px;min-width:2%}
 .sal-status{font-family:var(--font-body);font-size:11px;color:var(--text-secondary);text-align:right;padding:3px var(--sp-3);white-space:nowrap}
 /* Rating table styles */
+.hist-th-team{width:80px;text-align:left}
+.hist-team{font-family:var(--font-body);font-size:12px;color:var(--text-secondary);padding:3px var(--sp-2);white-space:nowrap}
+.sal-salary{font-family:var(--font-mono);font-weight:600;font-size:13px;color:var(--accent-bright);padding:3px var(--sp-3);white-space:nowrap;text-align:right}
 .rat-th-rank{width:36px;text-align:center}
 .rat-th-player{width:260px}
 .rat-th-rat{width:60px}
@@ -334,7 +337,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
     <div class="mini-scores" id="miniScores"><div class="mini-scores-track" id="miniScoresTrack"></div></div>
     <div class="rankings-mode" id="rankingsMode">
       <div class="next-games-bar"><div class="next-games-label">▶ NEXT GAMES</div><div class="next-games-list" id="nextGamesList"></div></div>
-      <div class="section-nav" id="sectionNav"><button class="section-btn active" data-section="teamRatings" onclick="jumpSection('teamRatings')">Team Ratings [T]</button><button class="section-btn" data-section="depth" onclick="jumpSection('depth')">Depth Charts [D]</button><button class="section-btn" data-section="injuries" onclick="jumpSection('injuries')">Injuries [I]</button><button class="section-btn" data-section="ratings" onclick="jumpSection('ratings')">Global Rating [G]</button><button class="section-btn" data-section="salaries" onclick="jumpSection('salaries')">Salaries [S]</button><span class="section-nav-hint">← → browse</span></div>
+      <div class="section-nav" id="sectionNav"><button class="section-btn active" data-section="teamRatings" onclick="jumpSection('teamRatings')">Team Ratings [T]</button><button class="section-btn" data-section="countingStats" onclick="jumpSection('countingStats')">Stats [C]</button><button class="section-btn" data-section="depth" onclick="jumpSection('depth')">Depth Charts [D]</button><button class="section-btn" data-section="injuries" onclick="jumpSection('injuries')">Injuries [I]</button><button class="section-btn" data-section="ratings" onclick="jumpSection('ratings')">Global Rating [G]</button><button class="section-btn" data-section="salaries" onclick="jumpSection('salaries')">Salaries [S]</button><button class="section-btn" data-section="histSalaries" onclick="jumpSection('histSalaries')">History [H]</button><span class="section-nav-hint">← → browse</span></div>
       <div class="rankings-panel" id="rankingsPanel"></div>
     </div>
   </main>
@@ -441,6 +444,8 @@ let ratingsData=null;
 let injuriesData=null;
 let depthData=null;
 let teamRatingsData=null;
+let histSalariesData=null;
+let countingStatsData=null;
 let rankingsScreens=[];
 let sectionStarts={};  // {teamRatings:0, depth:10, injuries:25, ratings:30, salaries:38}
 function buildRankingsScreens(){
@@ -455,6 +460,21 @@ function buildRankingsScreens(){
         source:scr.subtitle,
         isRating:true,
         isForm:false,
+        data:scr.players
+      });
+    }
+  }
+  // Counting stats screens
+  if(countingStatsData&&countingStatsData.screens){
+    sectionStarts.countingStats=rankingsScreens.length;
+    for(const scr of countingStatsData.screens){
+      const maxVal=Math.max(...scr.players.map(p=>p.value||0),1);
+      rankingsScreens.push({
+        title:scr.title,
+        source:'NBA.com',
+        isCountingStat:true,
+        stat:scr.stat,
+        maxValue:maxVal,
         data:scr.players
       });
     }
@@ -530,6 +550,20 @@ function buildRankingsScreens(){
     }
   }
   }
+  // Historical salary screens
+  if(histSalariesData&&histSalariesData.screens){
+    sectionStarts.histSalaries=rankingsScreens.length;
+    for(const scr of histSalariesData.screens){
+      const maxSal=Math.max(...scr.players.map(p=>p.salary),1);
+      rankingsScreens.push({
+        title:scr.title,
+        source:'HoopsHype',
+        isHistSalary:true,
+        maxSalary:maxSal,
+        data:scr.players
+      });
+    }
+  }
 }
 function pollSalaries(){
   fetch('/api/salaries').then(r=>r.json()).then(data=>{
@@ -576,16 +610,38 @@ function pollTeamRatings(){
     }
   }).catch(e=>console.warn('Team ratings fetch error:',e));
 }
+function pollHistSalaries(){
+  fetch('/api/hist_salaries').then(r=>r.json()).then(data=>{
+    if(data&&data.screens&&data.screens.length>0){
+      histSalariesData=data;
+      buildRankingsScreens();
+      console.log('Historical salaries loaded:',data.count,'screens');
+    }
+  }).catch(e=>console.warn('Historical salaries fetch error:',e));
+}
+function pollCountingStats(){
+  fetch('/api/counting_stats').then(r=>r.json()).then(data=>{
+    if(data&&data.screens&&data.screens.length>0){
+      countingStatsData=data;
+      buildRankingsScreens();
+      console.log('Counting stats loaded:',data.count,'screens');
+    }
+  }).catch(e=>console.warn('Counting stats fetch error:',e));
+}
 pollSalaries();
 pollRatings();
 pollInjuries();
 pollDepth();
 pollTeamRatings();
+pollHistSalaries();
+pollCountingStats();
 setInterval(pollSalaries,30*60*1000);
 setInterval(pollRatings,30*60*1000);
 setInterval(pollInjuries,15*60*1000);
 setInterval(pollDepth,30*60*1000);
 setInterval(pollTeamRatings,30*60*1000);
+setInterval(pollHistSalaries,60*60*1000);
+setInterval(pollCountingStats,30*60*1000);
 
 const MOCK_HEADLINES=[
   {text:'Lakers exploring trade options for additional wing depth ahead of deadline',isNew:true,time:'12m'},
@@ -914,7 +970,45 @@ function renderRankings(r){
   const dots=total<=10
     ?rankingsScreens.map((_,i)=>`<div class="rankings-progress-dot ${i===currentRankingIndex?'active':''}"></div>`).join('')
     :`<span style="font-family:var(--font-mono);font-size:12px;color:var(--text-tertiary)">${currentRankingIndex+1} / ${total}</span>`;
-  if(r.isTeam){
+  if(r.isCountingStat){
+    const maxVal=r.maxValue||1;
+    const statLabel=r.stat==='FG3M'?'3PM':r.stat;
+    const rows=r.data.map(p=>{
+      const pct=Math.max(2,Math.round((p.value||0)/maxVal*100));
+      const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
+      return `<tr>
+        <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
+        <td class="sal-player">${p.name}${flagHtml}</td>
+        <td class="hist-team">${p.team}</td>
+        <td class="rat-stat">${p.gp}</td>
+        <td class="sal-salary">${p.valueDisplay}</td>
+        <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
+      </tr>`;
+    }).join('');
+    p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
+      <div class="sal-table-wrap"><table class="sal-table">
+        <thead><tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-g">GP</th><th class="sal-th-salary">${statLabel}</th><th class="sal-th-bar"></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  } else if(r.isHistSalary){
+    const maxSal=r.maxSalary||1;
+    const rows=r.data.map(p=>{
+      const pct=Math.max(2,Math.round(p.salary/maxSal*100));
+      const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
+      return `<tr>
+        <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
+        <td class="sal-player">${p.name}${flagHtml}</td>
+        <td class="hist-team">${p.team}</td>
+        <td class="sal-salary">${p.salaryDisplay}</td>
+        <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
+      </tr>`;
+    }).join('');
+    p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
+      <div class="sal-table-wrap"><table class="sal-table">
+        <thead><tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="sal-th-salary">SALARY</th><th class="sal-th-bar"></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  } else if(r.isTeam){
     const maxSal=r.maxSalary||1;
     const rows=r.data.map(row=>{
       const pct=Math.max(2,Math.round(row.salRaw/maxSal*100));
@@ -935,7 +1029,7 @@ function renderRankings(r){
     const maxRat=Math.max(...r.data.map(p=>parseFloat(p.rating)||0),1);
     let thead,rows;
     if(r.isForm){
-      thead=`<tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="rat-th-rat">RATING</th><th class="rat-th-bar"></th><th class="rat-th-stat">2024-25</th><th class="rat-th-stat">DIFF</th></tr>`;
+      thead=`<tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-rat">RATING</th><th class="rat-th-bar"></th><th class="rat-th-stat">2024-25</th><th class="rat-th-stat">DIFF</th></tr>`;
       rows=r.data.map(p=>{
         const pct=Math.max(2,Math.round((parseFloat(p.rating)||0)/maxRat*100));
         const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
@@ -945,6 +1039,7 @@ function renderRankings(r){
         return `<tr>
           <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
           <td class="sal-player">${p.name}${flagHtml}</td>
+          <td class="hist-team">${p.team||''}</td>
           <td class="rat-val">${p.rating}</td>
           <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
           <td class="rat-stat">${p.oldRating}</td>
@@ -952,13 +1047,14 @@ function renderRankings(r){
         </tr>`;
       }).join('');
     } else {
-      thead=`<tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="rat-th-rat">RAT</th><th class="rat-th-bar"></th><th class="rat-th-g">G</th><th class="rat-th-stat">PTS</th><th class="rat-th-stat">REB</th><th class="rat-th-stat">AST</th></tr>`;
+      thead=`<tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-rat">RAT</th><th class="rat-th-bar"></th><th class="rat-th-g">G</th><th class="rat-th-stat">PTS</th><th class="rat-th-stat">REB</th><th class="rat-th-stat">AST</th></tr>`;
       rows=r.data.map(p=>{
         const pct=Math.max(2,Math.round((parseFloat(p.rating)||0)/maxRat*100));
         const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
         return `<tr>
           <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
           <td class="sal-player">${p.name}${flagHtml}</td>
+          <td class="hist-team">${p.team||''}</td>
           <td class="rat-val">${p.rating}</td>
           <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
           <td class="rat-stat">${p.games||''}</td>
@@ -1158,7 +1254,7 @@ function init(){
   renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);
   setMode(determineAutoMode(MOCK_GAMES));
   // Hash-based section navigation: http://localhost:5000/#depth etc.
-  const hashMap={'#team-ratings':'teamRatings','#depth':'depth','#injuries':'injuries','#ratings':'ratings','#salaries':'salaries'};
+  const hashMap={'#team-ratings':'teamRatings','#stats':'countingStats','#depth':'depth','#injuries':'injuries','#ratings':'ratings','#salaries':'salaries','#history':'histSalaries'};
   function checkHash(){
     const h=window.location.hash.toLowerCase();
     if(hashMap[h]){
@@ -1183,7 +1279,7 @@ function jumpSection(section){
 }
 function updateNavHighlight(){
   const btns=document.querySelectorAll('.section-btn');
-  const sections=['teamRatings','depth','injuries','ratings','salaries'];
+  const sections=['teamRatings','countingStats','depth','injuries','ratings','salaries','histSalaries'];
   let current='';
   for(let i=sections.length-1;i>=0;i--){
     if(sectionStarts[sections[i]]!==undefined&&currentRankingIndex>=sectionStarts[sections[i]]){current=sections[i];break;}
@@ -1197,10 +1293,12 @@ function updateNavHighlight(){
     if(currentMode==='rankings'&&rankingsScreens.length>0){
       const jumpTo=(idx)=>{if(idx!==undefined){currentRankingIndex=idx;renderRankings(rankingsScreens[idx]);updateNavHighlight();}};
       if(e.key==='t'||e.key==='T')jumpTo(sectionStarts.teamRatings);
+      if(e.key==='c'||e.key==='C')jumpTo(sectionStarts.countingStats);
       if(e.key==='d'||e.key==='D')jumpTo(sectionStarts.depth);
       if(e.key==='i'||e.key==='I')jumpTo(sectionStarts.injuries);
       if(e.key==='g'||e.key==='G')jumpTo(sectionStarts.ratings);
       if(e.key==='s'||e.key==='S')jumpTo(sectionStarts.salaries);
+      if(e.key==='h'||e.key==='H')jumpTo(sectionStarts.histSalaries);
       if(e.key==='ArrowRight'){currentRankingIndex=(currentRankingIndex+1)%rankingsScreens.length;renderRankings(rankingsScreens[currentRankingIndex]);updateNavHighlight();}
       if(e.key==='ArrowLeft'){currentRankingIndex=(currentRankingIndex-1+rankingsScreens.length)%rankingsScreens.length;renderRankings(rankingsScreens[currentRankingIndex]);updateNavHighlight();}
     }

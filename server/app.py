@@ -786,7 +786,7 @@ _SALARIES_GID = "0"
 _PLAYER_COUNTRY = {
     "Dyson Daniels": "au", "Josh Green": "au", "Josh Giddey": "au",
     "Lachlan Olbrich": "au", "Luke Travers": "au", "Tyrese Proctor": "au",
-    "Dante Exum": "au", "Kyrie Irving": "au", "Alex Toohey": "au",
+    "Dante Exum": "au", "Alex Toohey": "au",
     "Johnny Furphy": "au", "Jock Landale": "au", "Joe Ingles": "au",
     "Rocco Zikarsky": "au", "Jakob Poeltl": "at",
     "Buddy Hield": "bs", "Deandre Ayton": "bs", "VJ Edgecombe": "bs",
@@ -840,13 +840,42 @@ _PLAYER_COUNTRY = {
     "Luka Doncic": "si",
     "Khaman Maluach": "ss", "Duop Reath": "ss",
     "Hugo Gonzalez": "es", "Santi Aldama": "es",
-    "Chris Boucher": "lc",
     "Bobi Klintman": "se", "Pelle Larsson": "se",
     "Clint Capela": "ch", "Yanic Konan Niederhauser": "ch", "Kyshawn George": "ch",
     "Alperen Sengun": "tr",
     "Svi Mykhailiuk": "ua", "Max Shulga": "ua",
     "Amari Williams": "gb", "OG Anunoby": "gb",
     "Tosan Evbuomwan": "gb", "Jeremy Sochan": "gb",
+    # Retired international players (for historical salary screens)
+    "Marc Gasol": "es", "Pau Gasol": "es", "Jose Calderon": "es",
+    "Juan Hernangomez": "es", "Willy Hernangomez": "es", "Ricky Rubio": "es",
+    "Serge Ibaka": "es", "Alex Abrines": "es",
+    "Dirk Nowitzki": "de", "Detlef Schrempf": "de", "Chris Kaman": "de",
+    "Tony Parker": "fr", "Boris Diaw": "fr", "Evan Fournier": "fr",
+    "Frank Ntilikina": "fr", "Ian Mahinmi": "fr", "Rodrigue Beaubois": "fr",
+    "Manu Ginobili": "ar", "Luis Scola": "ar", "Carlos Delfino": "ar",
+    "Facundo Campazzo": "ar", "Luca Vildoza": "ar",
+    "Steve Nash": "ca", "Tristan Thompson": "ca", "Cory Joseph": "ca",
+    "Nik Stauskas": "ca", "Trey Lyles": "ca", "Chris Boucher": "ca",
+    "Yao Ming": "cn", "Yi Jianlian": "cn", "Zhou Qi": "cn",
+    "Andrea Bargnani": "it", "Danilo Gallinari": "it", "Marco Belinelli": "it",
+    "Goran Dragic": "si", "Beno Udrih": "si",
+    "Peja Stojakovic": "rs", "Vlade Divac": "rs",
+    "Hedo Turkoglu": "tr", "Mehmet Okur": "tr", "Ersan Ilyasova": "tr",
+    "Enes Kanter": "tr", "Cedi Osman": "tr",
+    "Hakeem Olajuwon": "ng", "Dikembe Mutombo": "cd",
+    "Patrick Ewing": "jm", "Luol Deng": "gb", "Ben Simmons": "au",
+    "Andrew Bogut": "au", "Patty Mills": "au", "Matthew Dellavedova": "au",
+    "Aron Baynes": "au", "Thon Maker": "au",
+    "Toni Kukoc": "hr", "Drazen Petrovic": "hr",
+    "Arvydas Sabonis": "lt", "Zydrunas Ilgauskas": "lt",
+    "Andrei Kirilenko": "ru", "Timofey Mozgov": "ru", "Alexey Shved": "ru",
+    "Gorgui Dieng": "sn",
+    "Nene": "br", "Leandro Barbosa": "br", "Anderson Varejao": "br",
+    "Tiago Splitter": "br",
+    "Samuel Dalembert": "ht",
+    "Gheorghe Muresan": "ro",
+    "Manute Bol": "ss",
 }
 
 
@@ -1036,6 +1065,7 @@ def fetch_ratings():
 
             rat = row[start_col + 1].strip() if start_col + 1 < len(row) else ""
             country = _PLAYER_COUNTRY.get(name, "")
+            team = _player_team_map.get(name, "")
 
             if is_form:
                 # Cols: PLAYER, RAT (current), 2024-25 (old), DIFF
@@ -1044,6 +1074,7 @@ def fetch_ratings():
                 players.append({
                     "rank": len(players) + 1,
                     "name": name,
+                    "team": team,
                     "rating": rat,
                     "oldRating": old_rat,
                     "diff": diff,
@@ -1057,6 +1088,7 @@ def fetch_ratings():
                 players.append({
                     "rank": len(players) + 1,
                     "name": name,
+                    "team": team,
                     "rating": rat,
                     "games": games,
                     "pts": pts,
@@ -1217,6 +1249,340 @@ def fetch_team_ratings():
 def api_team_ratings():
     """Return team rating screens."""
     data = fetch_team_ratings()
+    return jsonify({"screens": data, "count": len(data)})
+
+
+# ═══════════════════════════════════════
+# HISTORICAL SALARIES (Google Sheets)
+# ═══════════════════════════════════════
+
+_HIST_SHEET_ID = "1ZrDfzqiC31Hu3YCtxT4aZbZF4QVCVyGe6wBytR2LF30"
+_HIST_GID = "1151460858"
+_HIST_START_YEAR = 1991
+_HIST_TOP_N = 20
+
+hist_salaries_cache = TTLCache(maxsize=1, ttl=3600)  # 1 hour
+last_good_hist_salaries = []
+
+
+def _parse_salary(s):
+    """Parse '$55,761,217' → 55761217"""
+    s = s.strip().replace("$", "").replace(",", "")
+    try:
+        return int(s)
+    except (ValueError, TypeError):
+        return 0
+
+
+def fetch_hist_salaries():
+    """Fetch historical top salaries by year (1991-present)."""
+    global last_good_hist_salaries
+
+    if "hs" in hist_salaries_cache:
+        return hist_salaries_cache["hs"]
+
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_HIST_SHEET_ID}"
+        f"/export?format=csv&gid={_HIST_GID}"
+    )
+    log.info("Fetching historical salaries from Google Sheet...")
+
+    try:
+        resp = requests.get(csv_url, timeout=30)
+        resp.raise_for_status()
+        resp.encoding = 'utf-8'
+    except Exception as e:
+        log.warning(f"Historical salaries fetch failed: {e}")
+        return last_good_hist_salaries
+
+    reader = csv.reader(io.StringIO(resp.text))
+
+    # Col 0=TEAM, 1=YEAR, 2=PLAYER, 3=SALARY
+    by_year = {}
+    for row_num, row in enumerate(reader):
+        if row_num == 0:
+            continue
+        if len(row) < 4:
+            continue
+        team = row[0].strip()
+        year_str = row[1].strip()
+        player = row[2].strip()
+        salary_str = row[3].strip()
+
+        if not year_str or not player or not salary_str:
+            continue
+
+        try:
+            year = int(year_str)
+        except ValueError:
+            continue
+
+        if year < _HIST_START_YEAR:
+            continue
+
+        salary = _parse_salary(salary_str)
+        if salary <= 0:
+            continue
+
+        if year not in by_year:
+            by_year[year] = []
+
+        by_year[year].append({
+            "name": player,
+            "team": team,
+            "salary": salary,
+            "salaryDisplay": salary_str,
+            "country": _PLAYER_COUNTRY.get(player, ""),
+        })
+
+    # Sort each year by salary desc, take top N, assign ranks
+    screens = []
+    for year in sorted(by_year.keys()):
+        players = by_year[year]
+        players.sort(key=lambda p: p["salary"], reverse=True)
+        top = players[:_HIST_TOP_N]
+        for i, p in enumerate(top):
+            p["rank"] = i + 1
+
+        # Display year as season format: 1991 → "1990-91"
+        season = f"{year - 1}-{str(year)[-2:]}"
+        screens.append({
+            "title": f"Highest-Paid Players — {season}",
+            "year": year,
+            "players": top,
+        })
+
+    if screens:
+        hist_salaries_cache["hs"] = screens
+        last_good_hist_salaries = screens
+        log.info(f"Cached {len(screens)} historical salary screens ({min(by_year.keys())}-{max(by_year.keys())})")
+
+    return screens
+
+
+@app.route("/api/hist_salaries")
+def api_hist_salaries():
+    """Return historical salary screens."""
+    data = fetch_hist_salaries()
+    return jsonify({"screens": data, "count": len(data)})
+
+
+# ═══════════════════════════════════════
+# SEASON LEADERS (NBA API - leagueleaders)
+# ═══════════════════════════════════════
+
+_NBA_STATS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://www.nba.com/",
+    "Accept": "application/json",
+    "x-nba-stats-origin": "stats",
+    "x-nba-stats-token": "true",
+    "Origin": "https://www.nba.com",
+}
+
+# (api_key, display_label)
+_AVG_CATS = [
+    ("PTS", "Points Per Game"),
+    ("REB", "Rebounds Per Game"),
+    ("AST", "Assists Per Game"),
+    ("STL", "Steals Per Game"),
+    ("BLK", "Blocks Per Game"),
+    ("FG3M", "Three-Pointers Per Game"),
+    ("FGM", "Field Goals Per Game"),
+    ("FTM", "Free Throws Per Game"),
+    ("OREB", "Offensive Reb Per Game"),
+    ("DREB", "Defensive Reb Per Game"),
+    ("TOV", "Turnovers Per Game"),
+    ("MIN", "Minutes Per Game"),
+]
+
+_PCT_CATS = [
+    ("FG_PCT", "Field Goal %", "FGA", 200),
+    ("FG3_PCT", "Three-Point %", "FG3A", 100),
+    ("FT_PCT", "Free Throw %", "FTA", 100),
+]
+
+_STATS_TOP_N = 20
+_STATS_MIN_GP = 15  # minimum GP for percentage leaders
+
+
+def _normalize_name(name):
+    """Strip diacritics: Dončić → Doncic, Jokić → Jokic."""
+    import unicodedata
+    return ''.join(c for c in unicodedata.normalize('NFD', name) if unicodedata.category(c) != 'Mn')
+
+counting_stats_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min
+last_good_counting_stats = []
+
+
+def _current_nba_season():
+    """Return current NBA season string, e.g. '2025-26'."""
+    from datetime import datetime
+    now = datetime.now()
+    y = now.year if now.month >= 10 else now.year - 1
+    return f"{y}-{str(y + 1)[-2:]}"
+
+
+def _fetch_nba_leaders(season, per_mode):
+    """Fetch one dataset from NBA leagueleaders endpoint."""
+    url = "https://stats.nba.com/stats/leagueleaders"
+    params = {
+        "Season": season,
+        "SeasonType": "Regular Season",
+        "PerMode": per_mode,
+        "Scope": "S",
+        "StatCategory": "PTS",
+        "LeagueID": "00",
+        "ActiveFlag": "",
+    }
+    resp = requests.get(url, params=params, headers=_NBA_STATS_HEADERS, timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
+    rs = data.get("resultSet", {})
+    return rs.get("headers", []), rs.get("rowSet", [])
+
+
+def _build_leader_screens(api_headers, rows, categories, season, mode_label, min_gp=0):
+    """Build screens from a dataset for given stat categories."""
+    col_map = {h: i for i, h in enumerate(api_headers)}
+    player_i = col_map.get("PLAYER", 2)
+    team_i = col_map.get("TEAM", 4)
+    gp_i = col_map.get("GP", 5)
+    is_avg = mode_label in ("Per Game", "Percentage")
+
+    screens = []
+    for stat_key, title in categories:
+        stat_i = col_map.get(stat_key)
+        if stat_i is None:
+            continue
+
+        # Filter by min GP if needed
+        eligible = [r for r in rows if r[gp_i] >= min_gp] if min_gp > 0 else rows
+
+        # Sort by this stat descending
+        sorted_rows = sorted(eligible, key=lambda r: r[stat_i] or 0, reverse=True)
+        top = sorted_rows[:_STATS_TOP_N]
+
+        players = []
+        for rank, row in enumerate(top, 1):
+            name = _normalize_name(row[player_i])
+            val = row[stat_i]
+            if isinstance(val, float):
+                if stat_key.endswith("_PCT"):
+                    disp = f"{val * 100:.1f}%"
+                else:
+                    disp = f"{val:.1f}"
+            elif isinstance(val, int):
+                disp = f"{val:,}"
+            else:
+                disp = str(val)
+            players.append({
+                "rank": rank,
+                "name": name,
+                "team": row[team_i],
+                "gp": row[gp_i],
+                "value": val,
+                "valueDisplay": disp,
+                "country": _PLAYER_COUNTRY.get(name, ""),
+            })
+
+        stat_label = stat_key.replace("_PCT", "%").replace("FG3M", "3PM").replace("FG3", "3P")
+        screens.append({
+            "title": f"{title} — {season}",
+            "stat": stat_label,
+            "mode": mode_label,
+            "players": players,
+        })
+
+    return screens
+
+
+def fetch_counting_stats():
+    """Fetch league leaders from NBA stats API (totals + per game + pct)."""
+    global last_good_counting_stats
+
+    if "cs" in counting_stats_cache:
+        return counting_stats_cache["cs"]
+
+    season = _current_nba_season()
+    log.info(f"Fetching season leaders from NBA API (season {season})...")
+
+    screens = []
+    try:
+        # Per Game
+        h_avg, rows_avg = _fetch_nba_leaders(season, "PerGame")
+        screens.extend(_build_leader_screens(h_avg, rows_avg, _AVG_CATS, season, "Per Game"))
+        log.info(f"  Per Game: {len(rows_avg)} players, {len(_AVG_CATS)} categories")
+
+        # Percentages (from PerGame data, with min GP + min attempts filter)
+        col_map_avg = {h: i for i, h in enumerate(h_avg)}
+        player_i = col_map_avg.get("PLAYER", 2)
+        team_i = col_map_avg.get("TEAM", 4)
+        gp_i = col_map_avg.get("GP", 5)
+
+        for stat_key, title, attempts_key, min_attempts in _PCT_CATS:
+            stat_i = col_map_avg.get(stat_key)
+            att_i = col_map_avg.get(attempts_key)
+            if stat_i is None:
+                continue
+
+            # Filter: min GP AND min attempts (from Totals data for attempt counts)
+            # PerGame data has per-game attempts, so we need total attempts = per_game * GP
+            eligible = []
+            for r in rows_avg:
+                if r[gp_i] < _STATS_MIN_GP:
+                    continue
+                if att_i is not None:
+                    att_per_game = r[att_i] or 0
+                    total_att = att_per_game * r[gp_i]
+                    if total_att < min_attempts:
+                        continue
+                eligible.append(r)
+
+            sorted_rows = sorted(eligible, key=lambda r: r[stat_i] or 0, reverse=True)
+            top = sorted_rows[:_STATS_TOP_N]
+
+            players = []
+            for rank, row in enumerate(top, 1):
+                name = _normalize_name(row[player_i])
+                val = row[stat_i]
+                disp = f"{val * 100:.1f}%" if isinstance(val, float) else str(val)
+                players.append({
+                    "rank": rank,
+                    "name": name,
+                    "team": row[team_i],
+                    "gp": row[gp_i],
+                    "value": val,
+                    "valueDisplay": disp,
+                    "country": _PLAYER_COUNTRY.get(name, ""),
+                })
+
+            stat_label = stat_key.replace("_PCT", "%").replace("FG3", "3P")
+            screens.append({
+                "title": f"{title} — {season}",
+                "stat": stat_label,
+                "mode": "Percentage",
+                "players": players,
+            })
+
+        log.info(f"  Percentages: {len(_PCT_CATS)} categories (min {_STATS_MIN_GP} GP + min attempts)")
+
+    except Exception as e:
+        log.warning(f"Season leaders fetch failed: {e}")
+        return last_good_counting_stats
+
+    if screens:
+        counting_stats_cache["cs"] = screens
+        last_good_counting_stats = screens
+        log.info(f"Cached {len(screens)} season leader screens")
+
+    return screens
+
+
+@app.route("/api/counting_stats")
+def api_counting_stats():
+    """Return season leader screens."""
+    data = fetch_counting_stats()
     return jsonify({"screens": data, "count": len(data)})
 
 
@@ -1715,6 +2081,16 @@ def _prewarm_caches():
         fetch_injuries()
     except Exception as e:
         log.warning(f"Pre-warm injuries failed: {e}")
+
+    try:
+        fetch_hist_salaries()
+    except Exception as e:
+        log.warning(f"Pre-warm historical salaries failed: {e}")
+
+    try:
+        fetch_counting_stats()
+    except Exception as e:
+        log.warning(f"Pre-warm counting stats failed: {e}")
 
     log.info("Cache pre-warm complete")
 

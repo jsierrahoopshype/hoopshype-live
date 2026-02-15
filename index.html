@@ -172,6 +172,11 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 /* ═══ RANKINGS ═══ */
 .rankings-mode{flex:1;display:none;flex-direction:column;gap:var(--sp-3)}
 .rankings-mode.active{display:flex}
+.section-nav{display:flex;gap:var(--sp-2);padding:0 var(--sp-3);align-items:center;flex-wrap:wrap}
+.section-btn{font-family:var(--font-display);font-size:11px;font-weight:600;letter-spacing:0.5px;padding:4px 10px;border:1px solid var(--border-medium);border-radius:var(--radius-sm);background:var(--bg-surface);color:var(--text-tertiary);cursor:pointer;transition:all 0.15s}
+.section-btn:hover{border-color:var(--accent);color:var(--text-primary)}
+.section-btn.active{background:var(--accent);border-color:var(--accent);color:var(--bg-base)}
+.section-nav-hint{font-family:var(--font-mono);font-size:10px;color:var(--text-muted);margin-left:auto}
 .next-games-bar{background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:var(--sp-3) var(--sp-5);display:flex;align-items:center;gap:var(--sp-6);flex-shrink:0}
 .next-games-label{font-family:var(--font-display);font-weight:600;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);white-space:nowrap}
 .next-games-list{display:flex;gap:var(--sp-4);overflow:hidden;flex:1;position:relative}
@@ -224,6 +229,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .rat-th-rat{width:60px}
 .rat-th-bar{width:auto}
 .rat-th-stat{width:60px;text-align:right}
+.rat-th-g{width:35px;text-align:right}
 .rat-rank{text-align:center;padding:3px var(--sp-2)}
 .rat-val{font-family:var(--font-mono);font-weight:700;font-size:14px;color:var(--accent-bright);padding:3px var(--sp-3);white-space:nowrap}
 .rat-stat{font-family:var(--font-mono);font-weight:500;font-size:13px;color:var(--text-secondary);text-align:right;padding:3px var(--sp-3);white-space:nowrap}
@@ -328,6 +334,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
     <div class="mini-scores" id="miniScores"><div class="mini-scores-track" id="miniScoresTrack"></div></div>
     <div class="rankings-mode" id="rankingsMode">
       <div class="next-games-bar"><div class="next-games-label">▶ NEXT GAMES</div><div class="next-games-list" id="nextGamesList"></div></div>
+      <div class="section-nav" id="sectionNav"><button class="section-btn active" data-section="teamRatings" onclick="jumpSection('teamRatings')">Team Ratings [T]</button><button class="section-btn" data-section="depth" onclick="jumpSection('depth')">Depth Charts [D]</button><button class="section-btn" data-section="injuries" onclick="jumpSection('injuries')">Injuries [I]</button><button class="section-btn" data-section="ratings" onclick="jumpSection('ratings')">Global Rating [G]</button><button class="section-btn" data-section="salaries" onclick="jumpSection('salaries')">Salaries [S]</button><span class="section-nav-hint">← → browse</span></div>
       <div class="rankings-panel" id="rankingsPanel"></div>
     </div>
   </main>
@@ -435,10 +442,13 @@ let injuriesData=null;
 let depthData=null;
 let teamRatingsData=null;
 let rankingsScreens=[];
+let sectionStarts={};  // {teamRatings:0, depth:10, injuries:25, ratings:30, salaries:38}
 function buildRankingsScreens(){
   rankingsScreens=[];
+  sectionStarts={};
   // Team Rating screens (first)
   if(teamRatingsData&&teamRatingsData.screens){
+    sectionStarts.teamRatings=rankingsScreens.length;
     for(const scr of teamRatingsData.screens){
       rankingsScreens.push({
         title:'Global Rating — '+scr.title,
@@ -451,6 +461,7 @@ function buildRankingsScreens(){
   }
   // Depth chart screens
   if(depthData&&depthData.screens){
+    sectionStarts.depth=rankingsScreens.length;
     for(const scr of depthData.screens){
       rankingsScreens.push({
         title:'Depth Charts',
@@ -462,11 +473,11 @@ function buildRankingsScreens(){
   }
   // Injury report screens
   if(injuriesData&&injuriesData.screens){
-    const ts=injuriesData.lastUpdated||'';
+    sectionStarts.injuries=rankingsScreens.length;
     for(const scr of injuriesData.screens){
       rankingsScreens.push({
         title:'Injury Report',
-        source:'HoopsHype'+(ts?' — Last updated '+ts:''),
+        source:'HoopsHype',
         isInjury:true,
         left:scr.left,
         right:scr.right
@@ -475,6 +486,7 @@ function buildRankingsScreens(){
   }
   // Global Rating screens
   if(ratingsData&&ratingsData.screens){
+    sectionStarts.ratings=rankingsScreens.length;
     for(const scr of ratingsData.screens){
       rankingsScreens.push({
         title:scr.title,
@@ -487,6 +499,7 @@ function buildRankingsScreens(){
   }
   // Salary screens
   if(salariesData&&salariesData.rankings){
+    sectionStarts.salaries=rankingsScreens.length;
     const r=salariesData.rankings;
   // League-wide pages (15 per page)
   const pg1=r.slice(0,15),pg2=r.slice(15,30);
@@ -939,7 +952,7 @@ function renderRankings(r){
         </tr>`;
       }).join('');
     } else {
-      thead=`<tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="rat-th-rat">RAT</th><th class="rat-th-bar"></th><th class="rat-th-stat">PTS</th><th class="rat-th-stat">REB</th><th class="rat-th-stat">AST</th></tr>`;
+      thead=`<tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="rat-th-rat">RAT</th><th class="rat-th-bar"></th><th class="rat-th-g">G</th><th class="rat-th-stat">PTS</th><th class="rat-th-stat">REB</th><th class="rat-th-stat">AST</th></tr>`;
       rows=r.data.map(p=>{
         const pct=Math.max(2,Math.round((parseFloat(p.rating)||0)/maxRat*100));
         const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
@@ -948,6 +961,7 @@ function renderRankings(r){
           <td class="sal-player">${p.name}${flagHtml}</td>
           <td class="rat-val">${p.rating}</td>
           <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
+          <td class="rat-stat">${p.games||''}</td>
           <td class="rat-stat">${p.pts}</td>
           <td class="rat-stat">${p.reb}</td>
           <td class="rat-stat">${p.ast}</td>
@@ -1035,7 +1049,7 @@ function _showNextGamesPage(){
   container.innerHTML=nextGamesPages.map((pg,pi)=>`<div class="next-games-page${pi===currentNextGamesPage?' active':''}">${pg.map(g=>`<div class="next-game-item"><span class="next-game-teams">${g.away} @ ${g.home}</span><span class="next-game-time">${g.time}</span></div>`).join('')}</div>`).join('');
 }
 function rotateNextGames(){if(nextGamesPages.length<=1)return;currentNextGamesPage=(currentNextGamesPage+1)%nextGamesPages.length;_showNextGamesPage();}
-function rotateRankings(){if(rankingsScreens.length===0)return;currentRankingIndex=(currentRankingIndex+1)%rankingsScreens.length;renderRankings(rankingsScreens[currentRankingIndex]);}
+function rotateRankings(){if(rankingsScreens.length===0)return;currentRankingIndex=(currentRankingIndex+1)%rankingsScreens.length;renderRankings(rankingsScreens[currentRankingIndex]);updateNavHighlight();}
 
 let currentMode=null;
 function setMode(mode){if(mode===currentMode)return;currentMode=mode;const fg=document.getElementById('featuredGame'),ms=document.getElementById('miniScores'),rm=document.getElementById('rankingsMode'),lb=document.getElementById('liveBadge');if(mode==='live'){fg.classList.remove('hidden');ms.classList.remove('hidden');rm.classList.remove('active');lb.style.display='flex';}else{fg.classList.add('hidden');ms.classList.add('hidden');rm.classList.add('active');lb.style.display='none';const scheduled=getGames().filter(g=>g.status==='scheduled');if(scheduled.length>0){renderNextGames(scheduled.map(g=>({away:g.away.abbr,home:g.home.abbr,time:g.clock||'TBD'})));}else{renderNextGames(MOCK_NEXT_GAMES);}if(rankingsScreens.length>0){renderRankings(rankingsScreens[currentRankingIndex]);}}}
@@ -1143,12 +1157,54 @@ function init(){
   // Show mock data immediately as fallback
   renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);
   setMode(determineAutoMode(MOCK_GAMES));
+  // Hash-based section navigation: http://localhost:5000/#depth etc.
+  const hashMap={'#team-ratings':'teamRatings','#depth':'depth','#injuries':'injuries','#ratings':'ratings','#salaries':'salaries'};
+  function checkHash(){
+    const h=window.location.hash.toLowerCase();
+    if(hashMap[h]){
+      setTimeout(()=>{setMode('rankings');setTimeout(()=>jumpSection(hashMap[h]),500);},1000);
+    }
+  }
+  checkHash();
+  window.addEventListener('hashchange',()=>{const h=window.location.hash.toLowerCase();if(hashMap[h]){setMode('rankings');setTimeout(()=>jumpSection(hashMap[h]),200);}});
   scheduleNextScreen(); // kick off per-screen timer (screen 0 → 9s, screen 1/2 → 15s, then rotateGame)
   setInterval(rotateRankings,CONFIG.rankingsRotateInterval);
   setInterval(rotateNextGames,8000);
   setInterval(simulateScoreUpdate,5000);
   setInterval(()=>setMode(determineAutoMode(getGames())),30000);
-  document.addEventListener('keydown',e=>{if(e.key==='1')setMode('live');if(e.key==='2')setMode('rankings');});
+function jumpSection(section){
+  const idx=sectionStarts[section];
+  if(idx!==undefined){
+    if(currentMode!=='rankings')setMode('rankings');
+    currentRankingIndex=idx;
+    renderRankings(rankingsScreens[idx]);
+    updateNavHighlight();
+  }
+}
+function updateNavHighlight(){
+  const btns=document.querySelectorAll('.section-btn');
+  const sections=['teamRatings','depth','injuries','ratings','salaries'];
+  let current='';
+  for(let i=sections.length-1;i>=0;i--){
+    if(sectionStarts[sections[i]]!==undefined&&currentRankingIndex>=sectionStarts[sections[i]]){current=sections[i];break;}
+  }
+  btns.forEach(b=>{b.classList.toggle('active',b.dataset.section===current);});
+}
+  document.addEventListener('keydown',e=>{
+    if(e.key==='1')setMode('live');
+    if(e.key==='2')setMode('rankings');
+    // Section jumps (in rankings mode)
+    if(currentMode==='rankings'&&rankingsScreens.length>0){
+      const jumpTo=(idx)=>{if(idx!==undefined){currentRankingIndex=idx;renderRankings(rankingsScreens[idx]);updateNavHighlight();}};
+      if(e.key==='t'||e.key==='T')jumpTo(sectionStarts.teamRatings);
+      if(e.key==='d'||e.key==='D')jumpTo(sectionStarts.depth);
+      if(e.key==='i'||e.key==='I')jumpTo(sectionStarts.injuries);
+      if(e.key==='g'||e.key==='G')jumpTo(sectionStarts.ratings);
+      if(e.key==='s'||e.key==='S')jumpTo(sectionStarts.salaries);
+      if(e.key==='ArrowRight'){currentRankingIndex=(currentRankingIndex+1)%rankingsScreens.length;renderRankings(rankingsScreens[currentRankingIndex]);updateNavHighlight();}
+      if(e.key==='ArrowLeft'){currentRankingIndex=(currentRankingIndex-1+rankingsScreens.length)%rankingsScreens.length;renderRankings(rankingsScreens[currentRankingIndex]);updateNavHighlight();}
+    }
+  });
   // Start live API polling — fetch immediately, then on interval
   pollBluesky();pollHeadlines();pollScores();
   setInterval(pollBluesky,120000);   // every 2 minutes

@@ -51,6 +51,45 @@ last_good_salaries = {"rankings": [], "teams": {}, "count": 0}
 _player_salary_map = {}   # "LeBron James" → "$46.7M"
 _full_name_map = {}       # "L. James" → "LeBron James", etc.
 _player_team_map = {}     # "LeBron James" → "Los Angeles Lakers" (from depth charts)
+_salary_team_lookup = {}  # "LeBron James" → "Los Angeles Lakers" (from salary data, for depth ID)
+_last_name_map = {}       # "Mathurin" → [("Bennedict Mathurin", "Bennedict"), ...]
+
+
+def resolve_player_name(raw_name):
+    """Resolve a depth chart name to a full salary-sheet name.
+
+    Handles: exact match, 'F. LastName', 'Benn. LastName', last-name-only.
+    """
+    # 1. Exact match
+    if raw_name in _salary_team_lookup:
+        return raw_name
+    # 2. Standard abbreviation map ("N. Alexander-Walker" → "Nickeil ...")
+    if raw_name in _full_name_map:
+        return _full_name_map[raw_name]
+    # 3. Truncated first name with dot ("Benn. Mathurin", "Jul. Champagnie")
+    if ". " in raw_name:
+        prefix, last = raw_name.split(". ", 1)
+        last_clean = last.strip()
+        candidates = _last_name_map.get(last_clean, [])
+        if len(candidates) == 1:
+            return candidates[0][0]  # unique last name, safe match
+        # Multiple candidates: match by prefix
+        for full_name, first_name in candidates:
+            if first_name.lower().startswith(prefix.rstrip(".").lower()):
+                return full_name
+    # 4. Last name only fallback (unique last names)
+    parts = raw_name.rsplit(" ", 1)
+    if len(parts) == 2:
+        last = parts[1]
+        candidates = _last_name_map.get(last, [])
+        if len(candidates) == 1:
+            return candidates[0][0]
+        # Try matching first letter
+        first_initial = parts[0][0].upper() if parts[0] else ""
+        for full_name, first_name in candidates:
+            if first_name and first_name[0].upper() == first_initial:
+                return full_name
+    return raw_name
 
 # HTTP request defaults (no shared Session — requests.Session is NOT thread-safe
 # and we call from 20+ concurrent ThreadPoolExecutor workers)
@@ -880,11 +919,17 @@ def fetch_salaries():
         # Build cross-reference lookups
         sal_display = row[3].strip()
         _player_salary_map[player] = sal_display
+        _salary_team_lookup[player] = team
         # Build abbreviated → full name map ("N. Alexander-Walker" → "Nickeil Alexander-Walker")
         parts = player.split(" ", 1)
         if len(parts) == 2 and len(parts[0]) > 0:
             abbr = parts[0][0] + ". " + parts[1]
             _full_name_map[abbr] = player
+            # Build last name index for fuzzy matching
+            last = parts[1]
+            if last not in _last_name_map:
+                _last_name_map[last] = []
+            _last_name_map[last].append((player, parts[0]))
 
     teams_list = list(teams_dict.values())
     teams_list.sort(key=lambda t: t["total"], reverse=True)
@@ -1133,7 +1178,8 @@ def fetch_team_ratings():
         for i, p in enumerate(players):
             p["rank"] = i + 1
         rated = [p for p in players if p["ratingNum"] > 0]
-        avg_rat = sum(p["ratingNum"] for p in rated) / len(rated) if rated else 0
+        top6 = rated[:6]
+        avg_rat = sum(p["ratingNum"] for p in top6) / len(top6) if top6 else 0
         team_list.append({
             "name": team_name,
             "avgRating": round(avg_rat, 2),
@@ -1142,17 +1188,19 @@ def fetch_team_ratings():
             "players": players,
         })
 
-    # Sort teams by avg rating desc, assign rank
+    # Sort teams alphabetically, assign rank by rating
     team_list.sort(key=lambda t: t["avgRating"], reverse=True)
     for i, t in enumerate(team_list):
         t["rank"] = i + 1
+    # Re-sort alphabetically for display
+    team_list.sort(key=lambda t: t["name"])
 
     # One screen per team
     screens = []
     for t in team_list:
         screens.append({
-            "title": f"#{t['rank']} {t['name']}",
-            "subtitle": f"Team Avg: {t['avgDisplay']} ({t['ratedCount']} rated players)",
+            "title": f"{t['name']}",
+            "subtitle": f"Team average: {t['avgDisplay']} (Top 6 players)",
             "isForm": False,
             "players": t["players"],
         })
@@ -1358,21 +1406,21 @@ def fetch_depth():
 
     # Find header rows (PG/SG/SF/PF/C) to delimit team blocks
     header_rows = []
+    pos_set_detect = {"PG", "SG", "SF", "PF", "C"}
     for ri, row in enumerate(reader):
-        if (len(row) >= 5 and
-            row[0].strip() == "PG" and row[1].strip() == "SG" and
-            row[2].strip() == "SF" and row[3].strip() == "PF" and
-            row[4].strip() == "C"):
-            header_rows.append(ri)
+        if len(row) >= 5:
+            cols = [row[i].strip() for i in range(5)]
+            if all(c in pos_set_detect for c in cols):
+                header_rows.append(ri)
 
-    log.info(f"Depth charts: found {len(header_rows)} header rows, {len(_NBA_TEAMS_ALPHA)} teams expected")
+    log.info(f"Depth charts: found {len(header_rows)} header rows (salary lookup: {len(_salary_team_lookup)} players, name maps: {len(_full_name_map)} abbrevs, {len(_last_name_map)} last names)")
 
     all_teams = []
+    pos_set = set(_POSITIONS)  # {"PG", "SG", "SF", "PF", "C"}
     for hi, hrow in enumerate(header_rows):
-        if hi >= len(_NBA_TEAMS_ALPHA):
-            break
-        team_name = _NBA_TEAMS_ALPHA[hi]
         end = header_rows[hi + 1] if hi + 1 < len(header_rows) else len(reader)
+        # Read actual position labels from this header row (but force standard for display)
+        # Memphis has PF/PF instead of PF/C, but structurally col 5 is always the center
 
         # Parse depth levels: pairs of (name_row, salary_row)
         levels = []
@@ -1386,9 +1434,8 @@ def fetch_depth():
             if not any(cols):
                 ri += 1
                 continue
-            # Detect position header rows (PG/SG/SF/PF/C) - fuzzy match
-            pos_set = {"PG", "SG", "SF", "PF", "C"}
-            if sum(1 for c in cols if c in pos_set) >= 3:
+            # Detect next team's position header row
+            if all(c in pos_set_detect for c in cols):
                 break
 
             is_salary = any(c.startswith("$") for c in cols if c)
@@ -1407,7 +1454,7 @@ def fetch_depth():
                 level = {"label": label, "players": []}
                 for pi in range(5):
                     if names[pi]:
-                        full_name = _full_name_map.get(names[pi], names[pi])
+                        full_name = resolve_player_name(names[pi])
                         level["players"].append({
                             "pos": _POSITIONS[pi],
                             "name": full_name,
@@ -1420,7 +1467,28 @@ def fetch_depth():
             ri += 1
 
         if levels:
+            # Identify team by looking up player names in salary data
+            team_votes = {}
+            unmatched = []
+            for level in levels:
+                for p in level["players"]:
+                    t = _salary_team_lookup.get(p["name"], "")
+                    if t:
+                        team_votes[t] = team_votes.get(t, 0) + 1
+                    else:
+                        unmatched.append(p["name"])
+            if team_votes:
+                team_name = max(team_votes, key=team_votes.get)
+            else:
+                team_name = f"Unknown Team {hi + 1}"
+            if unmatched:
+                log.info(f"  Block {hi}: {team_name} ({team_votes.get(team_name,0)} votes, unmatched: {unmatched})")
+            else:
+                log.info(f"  Block {hi}: {team_name} ({team_votes.get(team_name,0)} votes, all matched)")
             all_teams.append({"name": team_name, "levels": levels})
+
+    # Sort teams alphabetically for display
+    all_teams.sort(key=lambda t: t["name"])
 
     # Build player→team cross-reference for team ratings
     _player_team_map.clear()
@@ -1428,7 +1496,15 @@ def fetch_depth():
         for level in t["levels"]:
             for p in level["players"]:
                 _player_team_map[p["name"]] = t["name"]
-    log.info(f"Depth charts: built player→team map with {len(_player_team_map)} players")
+
+    # Log all identified teams
+    team_names = [t["name"] for t in all_teams]
+    log.info(f"Depth charts: {len(all_teams)} teams identified: {team_names}")
+    has_memphis = any("emphis" in n for n in team_names)
+    log.info(f"Memphis present: {has_memphis}")
+    if not has_memphis:
+        # Log all vote results for debugging
+        log.warning("Memphis NOT found! Check team votes above.")
 
     # Pack teams into screens
     screens = []

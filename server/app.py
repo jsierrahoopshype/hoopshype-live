@@ -159,7 +159,12 @@ def fetch_bluesky_posts():
     if "posts" in bluesky_cache:
         return bluesky_cache["posts"]
 
-    log.info(f"Fetching Bluesky feeds for {len(config.BLUESKY_ACCOUNTS)} accounts...")
+    # Ensure hoopshypeofficial is always included
+    accounts = list(config.BLUESKY_ACCOUNTS)
+    if "hoopshypeofficial.bsky.social" not in accounts:
+        accounts.append("hoopshypeofficial.bsky.social")
+
+    log.info(f"Fetching Bluesky feeds for {len(accounts)} accounts...")
 
     all_posts = []
     success_count = 0
@@ -167,7 +172,7 @@ def fetch_bluesky_posts():
     with ThreadPoolExecutor(max_workers=BLUESKY_MAX_WORKERS) as executor:
         futures = {
             executor.submit(_fetch_one_feed, handle): handle
-            for handle in config.BLUESKY_ACCOUNTS
+            for handle in accounts
         }
         for future in as_completed(futures):
             handle = futures[future]
@@ -184,9 +189,8 @@ def fetch_bluesky_posts():
 
     log.info(f"Bluesky fetch done: {success_count} accounts returned posts, {fail_count} empty/failed")
 
-    # Sort by timestamp (newest first) and limit
+    # Sort by timestamp (newest first) — keep all posts for full feed
     all_posts.sort(key=lambda p: p.get("timestamp", ""), reverse=True)
-    all_posts = all_posts[:config.BLUESKY_MAX_POSTS]
 
     if all_posts:
         last_good_bluesky = all_posts
@@ -788,7 +792,7 @@ _PLAYER_COUNTRY = {
     "Lachlan Olbrich": "au", "Luke Travers": "au", "Tyrese Proctor": "au",
     "Dante Exum": "au", "Alex Toohey": "au",
     "Johnny Furphy": "au", "Jock Landale": "au", "Joe Ingles": "au",
-    "Rocco Zikarsky": "au", "Jakob Poeltl": "at",
+    "Rocco Zikarsky": "au", "Jakob Poeltl": "at", "Jeremy Sochan": "pl",
     "Buddy Hield": "bs", "Deandre Ayton": "bs", "VJ Edgecombe": "bs",
     "Ajay Mitchell": "be", "Toumani Camara": "be",
     "Jusuf Nurkic": "ba", "Gui Santos": "br",
@@ -808,7 +812,7 @@ _PLAYER_COUNTRY = {
     "Karlo Matkovic": "hr", "Ivica Zubac": "hr", "Dario Saric": "hr",
     "Vit Krejci": "cz",
     "Jonathan Kuminga": "cd", "Bismack Biyombo": "cd", "Oscar Tshiebwe": "cd",
-    "Al Horford": "do", "David Jones Garcia": "do",
+    "Al Horford": "do", "David Jones Garcia": "do", "Karl-Anthony Towns": "do",
     "Lauri Markkanen": "fi",
     "Zaccharie Risacher": "fr", "Nolan Traore": "fr",
     "Tidjane Salaun": "fr", "Moussa Diabate": "fr",
@@ -1066,6 +1070,8 @@ def fetch_ratings():
             rat = row[start_col + 1].strip() if start_col + 1 < len(row) else ""
             country = _PLAYER_COUNTRY.get(name, "")
             team = _player_team_map.get(name, "")
+            if team.lower().startswith("unknown"):
+                team = ""
 
             if is_form:
                 # Cols: PLAYER, RAT (current), 2024-25 (old), DIFF
@@ -1116,6 +1122,332 @@ def fetch_ratings():
 def api_ratings():
     """Return Global Rating ranking screens."""
     data = fetch_ratings()
+    return jsonify({"screens": data, "count": len(data)})
+
+
+# ═══════════════════════════════════════
+# DRAFT CLASS RATINGS (Bio sheet + Ratings)
+# ═══════════════════════════════════════
+
+_BIO_SHEET_ID = "1ZrDfzqiC31Hu3YCtxT4aZbZF4QVCVyGe6wBytR2LF30"
+_BIO_GID = "1488063724"
+
+draft_class_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min
+last_good_draft_classes = []
+
+
+def fetch_draft_classes():
+    """Build draft class rating screens from bio + ratings data."""
+    global last_good_draft_classes
+
+    if "dc" in draft_class_cache:
+        return draft_class_cache["dc"]
+
+    # 1) Fetch bio sheet → player → draft year map
+    bio_url = (
+        f"https://docs.google.com/spreadsheets/d/{_BIO_SHEET_ID}"
+        f"/export?format=csv&gid={_BIO_GID}"
+    )
+    log.info("Fetching bio data for draft classes...")
+
+    try:
+        resp = requests.get(bio_url, timeout=30)
+        resp.raise_for_status()
+        resp.encoding = 'utf-8'
+    except Exception as e:
+        log.warning(f"Bio sheet fetch failed: {e}")
+        return last_good_draft_classes
+
+    bio_reader = list(csv.reader(io.StringIO(resp.text)))
+    # col 0=PLAYER, col 9=DRAFT, col 11=TEAM, col 12=REAL TEAM
+    player_draft = {}
+    player_bio_team = {}
+    # Build case-insensitive lookup for bio names
+    bio_name_map = {}  # lowercase → original name
+    for row in bio_reader[1:]:
+        if len(row) < 10:
+            continue
+        name = row[0].strip()
+        draft_yr = row[9].strip()
+        team_abbr = row[11].strip() if len(row) > 11 else ""
+        real_team = row[12].strip() if len(row) > 12 else ""
+        if name and draft_yr.isdigit():
+            player_draft[name] = int(draft_yr)
+            bio_name_map[name.lower()] = name
+        if name and (real_team or team_abbr):
+            player_bio_team[name] = real_team or team_abbr
+
+    # Manual overrides for known mismatches / missing entries
+    # Case variant: ratings has "Tristan da Silva", bio has "Tristan Da Silva"
+    if "Tristan Da Silva" in player_draft and "Tristan da Silva" not in player_draft:
+        player_draft["Tristan da Silva"] = player_draft["Tristan Da Silva"]
+        player_bio_team["Tristan da Silva"] = player_bio_team.get("Tristan Da Silva", "")
+    # Tyrese Proctor: 2025 draft class
+    if "Tyrese Proctor" not in player_draft:
+        player_draft["Tyrese Proctor"] = 2025
+
+    log.info(f"  Bio: {len(player_draft)} players with draft year, {len(player_bio_team)} with team")
+
+    # 2) Fetch ratings sheet — read ALL players from Season block (start_col=14)
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_RATINGS_SHEET_ID}"
+        f"/export?format=csv&gid={_RATINGS_GID}"
+    )
+    try:
+        resp = requests.get(csv_url, timeout=30)
+        resp.raise_for_status()
+        resp.encoding = 'utf-8'
+    except Exception as e:
+        log.warning(f"Ratings fetch for draft classes failed: {e}")
+        return last_good_draft_classes
+
+    reader = list(csv.reader(io.StringIO(resp.text)))
+
+    # Read rated players from ALL rating blocks to maximize coverage
+    # Each block: PLAYER at offset +0, RAT at +1, then stats vary
+    # Standard blocks: +2=G, +3=PTS, +4=REB, +5=AST
+    _ALL_PLAYER_COLS = [3, 14, 25, 36, 47, 58, 80]  # skip 91 (Most In Form has different layout)
+    rated_map = {}  # name → player dict (keep highest rating)
+
+    for start_col in _ALL_PLAYER_COLS:
+        for row_idx in range(1, len(reader)):
+            row = reader[row_idx]
+            if start_col >= len(row):
+                continue
+            name = row[start_col].strip() if start_col < len(row) else ""
+            rat_str = row[start_col + 1].strip() if start_col + 1 < len(row) else ""
+            if not name or not rat_str:
+                continue
+            try:
+                rat = float(rat_str)
+            except ValueError:
+                continue
+
+            games = row[start_col + 2].strip() if start_col + 2 < len(row) else ""
+            pts = row[start_col + 3].strip() if start_col + 3 < len(row) else ""
+            reb = row[start_col + 4].strip() if start_col + 4 < len(row) else ""
+            ast = row[start_col + 5].strip() if start_col + 5 < len(row) else ""
+
+            # Use bio sheet team (3-letter abbreviation), fallback to depth chart team
+            team = player_bio_team.get(name, "") or _player_team_map.get(name, "")
+            # Clean up — never show "Unknown"
+            if team.lower().startswith("unknown"):
+                team = ""
+
+            # Keep the entry with the highest rating
+            if name not in rated_map or rat > rated_map[name]["rating"]:
+                rated_map[name] = {
+                    "name": name,
+                    "rating": rat,
+                    "ratingDisplay": rat_str,
+                    "games": games,
+                    "pts": pts,
+                    "reb": reb,
+                    "ast": ast,
+                    "team": team,
+                    "country": _PLAYER_COUNTRY.get(name, ""),
+                }
+
+    rated_players = list(rated_map.values())
+    log.info(f"  Ratings: {len(rated_players)} unique rated players from {len(_ALL_PLAYER_COLS)} blocks")
+
+    # 3) Group by draft class — use case-insensitive matching for bio lookup
+    by_class = {}
+    unmatched = 0
+    for p in rated_players:
+        yr = player_draft.get(p["name"])
+        # Fallback: case-insensitive lookup
+        if yr is None:
+            bio_name = bio_name_map.get(p["name"].lower())
+            if bio_name:
+                yr = player_draft.get(bio_name)
+        if yr is None:
+            unmatched += 1
+            continue
+        if yr not in by_class:
+            by_class[yr] = []
+        by_class[yr].append(p)
+
+    log.info(f"  Matched: {sum(len(v) for v in by_class.values())}, unmatched: {unmatched}")
+
+    # 4) Build screens — lump small old classes together
+    screens = []
+    small_bucket = []  # collect classes with ≤ 3 players for lumping
+    small_bucket_years = []
+
+    for year in sorted(by_class.keys(), reverse=True):
+        players = sorted(by_class[year], key=lambda p: p["rating"], reverse=True)
+
+        if len(players) <= 3 and year < 2015:
+            # Lump small old classes
+            small_bucket.extend(players)
+            small_bucket_years.append(year)
+        else:
+            # Full screen for this class
+            players = players[:20]
+            for i, p in enumerate(players):
+                p["rank"] = i + 1
+            top_n = players[:5]
+            avg = sum(p["rating"] for p in top_n) / len(top_n)
+            avg_label = f"Top {len(top_n)} avg" if len(top_n) > 1 else "Rating"
+
+            screens.append({
+                "title": f"Draft Class {year} — Global Rating",
+                "subtitle": f"{len(players)} rated player{'s' if len(players)!=1 else ''} | {avg_label}: {avg:.2f}",
+                "year": year,
+                "players": players,
+            })
+
+    # Flush lumped bucket into combined screens (max 20 per screen)
+    if small_bucket:
+        small_bucket.sort(key=lambda p: p["rating"], reverse=True)
+        yr_range = f"{min(small_bucket_years)}-{max(small_bucket_years)}"
+        # Tag each player with their draft year for display
+        for p in small_bucket:
+            yr = player_draft.get(p["name"])
+            if yr is None:
+                bio_name = bio_name_map.get(p["name"].lower())
+                if bio_name:
+                    yr = player_draft.get(bio_name)
+            p["draftYear"] = yr or ""
+        for chunk_start in range(0, len(small_bucket), 20):
+            chunk = small_bucket[chunk_start:chunk_start + 20]
+            for i, p in enumerate(chunk):
+                p["rank"] = chunk_start + i + 1
+            top_n = chunk[:5]
+            avg = sum(p["rating"] for p in top_n) / len(top_n)
+
+            screens.append({
+                "title": f"Draft Classes {yr_range} — Global Rating",
+                "subtitle": f"{len(small_bucket)} rated players from {len(small_bucket_years)} classes | Top 5 avg: {avg:.2f}",
+                "year": min(small_bucket_years),
+                "players": chunk,
+                "isLumped": True,
+            })
+
+    if screens:
+        draft_class_cache["dc"] = screens
+        last_good_draft_classes = screens
+        log.info(f"Cached {len(screens)} draft class screens ({min(by_class.keys())}-{max(by_class.keys())})")
+
+    return screens
+
+
+@app.route("/api/draft_classes")
+def api_draft_classes():
+    """Return draft class rating screens."""
+    data = fetch_draft_classes()
+    return jsonify({"screens": data, "count": len(data)})
+
+
+# ═══════════════════════════════════════
+# TRANSACTIONS
+# ═══════════════════════════════════════
+
+_TRANSACTIONS_GID = "2081598055"
+
+_TX_TEAM_NAMES = {
+    "ATL": "Atlanta", "BOS": "Boston", "BKN": "Brooklyn",
+    "CHA": "Charlotte", "CHI": "Chicago", "CLE": "Cleveland",
+    "DAL": "Dallas", "DEN": "Denver", "DET": "Detroit",
+    "GSW": "Golden State", "HOU": "Houston", "IND": "Indiana",
+    "LAC": "LA Clippers", "LAL": "LA Lakers", "MEM": "Memphis",
+    "MIA": "Miami", "MIL": "Milwaukee", "MIN": "Minnesota",
+    "NOP": "New Orleans", "NYK": "New York", "OKC": "Oklahoma City",
+    "ORL": "Orlando", "PHI": "Philadelphia", "PHX": "Phoenix",
+    "POR": "Portland", "SAC": "Sacramento", "SAS": "San Antonio",
+    "TOR": "Toronto", "UTA": "Utah", "WAS": "Washington",
+}
+
+transactions_cache = TTLCache(maxsize=1, ttl=900)  # 15 min
+last_good_transactions = []
+
+
+def fetch_transactions():
+    """Fetch recent NBA transactions from Google Sheet."""
+    global last_good_transactions
+
+    if "tx" in transactions_cache:
+        return transactions_cache["tx"]
+
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_INJURIES_SHEET_ID}"
+        f"/export?format=csv&gid={_TRANSACTIONS_GID}"
+    )
+    log.info("Fetching transactions from Google Sheet...")
+
+    try:
+        resp = requests.get(csv_url, timeout=30)
+        resp.raise_for_status()
+        resp.encoding = 'utf-8'
+    except Exception as e:
+        log.warning(f"Transactions fetch failed: {e}")
+        return last_good_transactions
+
+    reader = list(csv.reader(io.StringIO(resp.text)))
+    if len(reader) < 2:
+        return last_good_transactions
+
+    # Cols: 1=logo_url, 2=DATE, 3=TEAM, 4=PLAYER, 5=NOTES, 6=SALARY
+    # Date carries forward when blank
+    transactions = []
+    current_date = ""
+    for row in reader[1:]:
+        if len(row) < 5:
+            continue
+        player = row[4].strip() if len(row) > 4 else ""
+        if not player:
+            continue
+
+        date = row[2].strip() if len(row) > 2 else ""
+        if date:
+            current_date = date
+        team = row[3].strip() if len(row) > 3 else ""
+        notes = row[5].strip() if len(row) > 5 else ""
+        salary = row[6].strip() if len(row) > 6 else ""
+
+        # Clean salary — remove #N/A
+        if salary in ("#N/A", "N/A", "#REF!", ""):
+            salary = ""
+
+        # Map abbreviation to full team name
+        team_full = _TX_TEAM_NAMES.get(team.upper(), team)
+
+        country = _PLAYER_COUNTRY.get(player, "")
+
+        transactions.append({
+            "date": current_date,
+            "team": team_full,
+            "player": player,
+            "notes": notes,
+            "salary": salary,
+            "country": country,
+        })
+
+    log.info(f"  Transactions: {len(transactions)} total")
+
+    # Single screen with the 20 most recent
+    recent = transactions[:20]
+    screens = []
+    if recent:
+        screens.append({
+            "title": "NBA Transactions",
+            "subtitle": f"Most recent moves",
+            "transactions": recent,
+        })
+
+    if screens:
+        transactions_cache["tx"] = screens
+        last_good_transactions = screens
+        log.info(f"Cached {len(screens)} transaction screens")
+
+    return screens
+
+
+@app.route("/api/transactions")
+def api_transactions():
+    """Return transaction screens."""
+    data = fetch_transactions()
     return jsonify({"screens": data, "count": len(data)})
 
 
@@ -1595,6 +1927,7 @@ _INJURIES_GID = "306285159"
 
 injuries_cache = TTLCache(maxsize=1, ttl=900)  # 15 min
 last_good_injuries = []
+_questionable_players = set()  # Players with Questionable/Doubtful/Game Time Decision status
 
 
 def fetch_injuries():
@@ -1659,6 +1992,21 @@ def fetch_injuries():
 
     # Build two-column screens: left and right columns, ~15 rows each
     MAX_PER_COL = 14
+
+    # Update global questionable set for depth chart cross-reference
+    _questionable_players.clear()
+    for team_name, team_players in teams.items():
+        for p in team_players:
+            st = (p["status"] or "").lower()
+            if st in ("questionable", "doubtful", "game time decision", "day-to-day"):
+                raw_name = p["name"]
+                _questionable_players.add(raw_name)
+                # Also add resolved name for depth chart cross-reference
+                resolved = resolve_player_name(raw_name)
+                if resolved != raw_name:
+                    _questionable_players.add(resolved)
+    log.info(f"  Questionable/Doubtful players: {len(_questionable_players)} — {list(_questionable_players)[:10]}")
+
     # First build a flat list of team blocks (header + players)
     team_blocks = []
     for team_name in sorted(teams.keys()):
@@ -1826,6 +2174,7 @@ def fetch_depth():
                             "name": full_name,
                             "salary": salaries[pi],
                             "country": _PLAYER_COUNTRY.get(full_name, _PLAYER_COUNTRY.get(names[pi], "")),
+                            "questionable": full_name in _questionable_players,
                         })
                 if level["players"]:
                     levels.append(level)
@@ -1859,6 +2208,8 @@ def fetch_depth():
     # Build player→team cross-reference for team ratings
     _player_team_map.clear()
     for t in all_teams:
+        if t["name"].startswith("Unknown"):
+            continue  # Don't pollute map with unidentified teams
         for level in t["levels"]:
             for p in level["players"]:
                 _player_team_map[p["name"]] = t["name"]
@@ -1892,8 +2243,15 @@ def fetch_depth():
 
 @app.route("/api/depth")
 def api_depth():
-    """Return depth chart screens (multiple teams per screen)."""
+    """Return depth chart screens (multiple teams per screen).
+    Overlays questionable flags from current injury data."""
     data = fetch_depth()
+    # Dynamically apply questionable flags from latest injury data
+    for screen in data:
+        for team in screen.get("teams", []):
+            for level in team.get("levels", []):
+                for p in level.get("players", []):
+                    p["questionable"] = p["name"] in _questionable_players
     return jsonify({"screens": data, "count": len(data)})
 
 
@@ -2068,6 +2426,11 @@ def _prewarm_caches():
         log.warning(f"Pre-warm ratings failed: {e}")
 
     try:
+        fetch_injuries()
+    except Exception as e:
+        log.warning(f"Pre-warm injuries failed: {e}")
+
+    try:
         fetch_depth()
     except Exception as e:
         log.warning(f"Pre-warm depth charts failed: {e}")
@@ -2078,11 +2441,6 @@ def _prewarm_caches():
         log.warning(f"Pre-warm team ratings failed: {e}")
 
     try:
-        fetch_injuries()
-    except Exception as e:
-        log.warning(f"Pre-warm injuries failed: {e}")
-
-    try:
         fetch_hist_salaries()
     except Exception as e:
         log.warning(f"Pre-warm historical salaries failed: {e}")
@@ -2091,6 +2449,16 @@ def _prewarm_caches():
         fetch_counting_stats()
     except Exception as e:
         log.warning(f"Pre-warm counting stats failed: {e}")
+
+    try:
+        fetch_draft_classes()
+    except Exception as e:
+        log.warning(f"Pre-warm draft classes failed: {e}")
+
+    try:
+        fetch_transactions()
+    except Exception as e:
+        log.warning(f"Pre-warm transactions failed: {e}")
 
     log.info("Cache pre-warm complete")
 

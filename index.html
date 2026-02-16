@@ -224,8 +224,8 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .sal-bar{height:14px;background:linear-gradient(90deg,rgba(255,140,0,0.5),rgba(255,140,0,0.2));border-radius:2px;min-width:2%}
 .sal-status{font-family:var(--font-body);font-size:11px;color:var(--text-secondary);text-align:right;padding:3px var(--sp-3);white-space:nowrap}
 /* Rating table styles */
-.hist-th-team{width:80px;text-align:left}
-.hist-team{font-family:var(--font-body);font-size:12px;color:var(--text-secondary);padding:3px var(--sp-2);white-space:nowrap}
+.hist-th-team{width:60px;text-align:left}
+.hist-team{font-family:var(--font-body);font-size:13px;color:var(--text-secondary);padding:3px var(--sp-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60px}
 .sal-salary{font-family:var(--font-mono);font-weight:600;font-size:13px;color:var(--accent-bright);padding:3px var(--sp-3);white-space:nowrap;text-align:right}
 .rat-th-rank{width:36px;text-align:center}
 .rat-th-player{width:260px}
@@ -266,6 +266,15 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .dep-level{font-family:var(--font-display);font-weight:600;font-size:11px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.5px;padding:8px var(--sp-3) 8px var(--sp-4);vertical-align:top;border-right:1px solid var(--border-subtle)}
 .dep-cell{text-align:center;padding:6px var(--sp-2);vertical-align:top;border-bottom:1px solid rgba(255,255,255,0.03)}
 .dep-cell.dep-empty{color:var(--text-muted)}
+.dep-key{font-family:var(--font-body);font-size:13px;color:var(--text-secondary);padding:10px var(--sp-4) 6px;text-align:left}
+.tx-table{width:100%;border-collapse:collapse}
+.tx-table th{font-family:var(--font-display);font-weight:600;font-size:11px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.5px;padding:6px var(--sp-2);text-align:left;border-bottom:1px solid var(--border-subtle)}
+.tx-table td{padding:5px var(--sp-2);border-bottom:1px solid rgba(255,255,255,0.04);font-family:var(--font-body);font-size:13px}
+.tx-date{color:var(--text-tertiary);white-space:nowrap;width:65px}
+.tx-team{color:var(--accent);font-weight:600;white-space:nowrap}
+.tx-player{color:var(--text-primary);font-weight:500}
+.tx-notes{color:var(--text-secondary);font-size:12px}
+.tx-salary{color:var(--text-secondary);font-family:var(--font-mono);font-size:12px;text-align:right;white-space:nowrap}
 .dep-row-starters{background:rgba(99,179,237,0.08)}
 .dep-row-starters .dep-level{color:var(--accent-bright)}
 .dep-row-starters .dep-name{color:#fff;font-weight:600}
@@ -337,7 +346,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
     <div class="mini-scores" id="miniScores"><div class="mini-scores-track" id="miniScoresTrack"></div></div>
     <div class="rankings-mode" id="rankingsMode">
       <div class="next-games-bar"><div class="next-games-label">▶ NEXT GAMES</div><div class="next-games-list" id="nextGamesList"></div></div>
-      <div class="section-nav" id="sectionNav"><button class="section-btn active" data-section="teamRatings" onclick="jumpSection('teamRatings')">Team Ratings [T]</button><button class="section-btn" data-section="countingStats" onclick="jumpSection('countingStats')">Stats [C]</button><button class="section-btn" data-section="depth" onclick="jumpSection('depth')">Depth Charts [D]</button><button class="section-btn" data-section="injuries" onclick="jumpSection('injuries')">Injuries [I]</button><button class="section-btn" data-section="ratings" onclick="jumpSection('ratings')">Global Rating [G]</button><button class="section-btn" data-section="salaries" onclick="jumpSection('salaries')">Salaries [S]</button><button class="section-btn" data-section="histSalaries" onclick="jumpSection('histSalaries')">History [H]</button><span class="section-nav-hint">← → browse</span></div>
+      <div class="section-nav" id="sectionNav"><button class="section-btn active" data-section="teamRatings" onclick="jumpSection('teamRatings')">Team Ratings [T]</button><button class="section-btn" data-section="countingStats" onclick="jumpSection('countingStats')">Stats [C]</button><button class="section-btn" data-section="depth" onclick="jumpSection('depth')">Depth Charts [D]</button><button class="section-btn" data-section="injuries" onclick="jumpSection('injuries')">Injuries [I]</button><button class="section-btn" data-section="ratings" onclick="jumpSection('ratings')">Global Rating [G]</button><button class="section-btn" data-section="draftClass" onclick="jumpSection('draftClass')">Draft [Y]</button><button class="section-btn" data-section="transactions" onclick="jumpSection('transactions')">Transactions [X]</button><button class="section-btn" data-section="salaries" onclick="jumpSection('salaries')">Salaries [S]</button><button class="section-btn" data-section="histSalaries" onclick="jumpSection('histSalaries')">History [H]</button><span class="section-nav-hint">← → browse</span></div>
       <div class="rankings-panel" id="rankingsPanel"></div>
     </div>
   </main>
@@ -446,6 +455,8 @@ let depthData=null;
 let teamRatingsData=null;
 let histSalariesData=null;
 let countingStatsData=null;
+let draftClassData=null;
+let transactionsData=null;
 let rankingsScreens=[];
 let sectionStarts={};  // {teamRatings:0, depth:10, injuries:25, ratings:30, salaries:38}
 function buildRankingsScreens(){
@@ -514,6 +525,43 @@ function buildRankingsScreens(){
         isRating:true,
         isForm:scr.isForm||false,
         data:scr.players
+      });
+    }
+  }
+  // Draft class screens
+  if(draftClassData&&draftClassData.screens){
+    sectionStarts.draftClass=rankingsScreens.length;
+    for(const scr of draftClassData.screens){
+      rankingsScreens.push({
+        title:scr.title,
+        source:scr.subtitle,
+        isRating:true,
+        isForm:false,
+        isLumped:scr.isLumped||false,
+        data:scr.players.map(p=>({
+          rank:p.rank,
+          name:p.name,
+          team:p.team,
+          rating:p.ratingDisplay,
+          games:p.games,
+          pts:p.pts,
+          reb:p.reb,
+          ast:p.ast,
+          country:p.country,
+          draftYear:p.draftYear||''
+        }))
+      });
+    }
+  }
+  // Transaction screens
+  if(transactionsData&&transactionsData.screens){
+    sectionStarts.transactions=rankingsScreens.length;
+    for(const scr of transactionsData.screens){
+      rankingsScreens.push({
+        title:scr.title,
+        source:scr.subtitle,
+        isTransaction:true,
+        data:scr.transactions
       });
     }
   }
@@ -628,6 +676,24 @@ function pollCountingStats(){
     }
   }).catch(e=>console.warn('Counting stats fetch error:',e));
 }
+function pollDraftClasses(){
+  fetch('/api/draft_classes').then(r=>r.json()).then(data=>{
+    if(data&&data.screens&&data.screens.length>0){
+      draftClassData=data;
+      buildRankingsScreens();
+      console.log('Draft classes loaded:',data.count,'screens');
+    }
+  }).catch(e=>console.warn('Draft classes fetch error:',e));
+}
+function pollTransactions(){
+  fetch('/api/transactions').then(r=>r.json()).then(data=>{
+    if(data&&data.screens&&data.screens.length>0){
+      transactionsData=data;
+      buildRankingsScreens();
+      console.log('Transactions loaded:',data.count,'screens');
+    }
+  }).catch(e=>console.warn('Transactions fetch error:',e));
+}
 pollSalaries();
 pollRatings();
 pollInjuries();
@@ -635,6 +701,8 @@ pollDepth();
 pollTeamRatings();
 pollHistSalaries();
 pollCountingStats();
+pollDraftClasses();
+pollTransactions();
 setInterval(pollSalaries,30*60*1000);
 setInterval(pollRatings,30*60*1000);
 setInterval(pollInjuries,15*60*1000);
@@ -642,6 +710,8 @@ setInterval(pollDepth,30*60*1000);
 setInterval(pollTeamRatings,30*60*1000);
 setInterval(pollHistSalaries,60*60*1000);
 setInterval(pollCountingStats,30*60*1000);
+setInterval(pollDraftClasses,30*60*1000);
+setInterval(pollTransactions,15*60*1000);
 
 const MOCK_HEADLINES=[
   {text:'Lakers exploring trade options for additional wing depth ahead of deadline',isNew:true,time:'12m'},
@@ -952,7 +1022,8 @@ function renderTicker(headlines){
 }
 
 function renderFeed(posts){
-  document.getElementById('feedContainer').innerHTML=posts.map((p,i)=>{
+  const fc=document.getElementById('feedContainer');
+  fc.innerHTML=posts.map((p,i)=>{
     const fb=`<div class="post-avatar">${p.avatar}</div>`;
     const av=p.avatarUrl
       ?`<img class="post-avatar-img" src="${p.avatarUrl}" alt="" width="28" height="28" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`
@@ -972,9 +1043,9 @@ function renderRankings(r){
     :`<span style="font-family:var(--font-mono);font-size:12px;color:var(--text-tertiary)">${currentRankingIndex+1} / ${total}</span>`;
   if(r.isCountingStat){
     const maxVal=r.maxValue||1;
-    const statLabel=r.stat==='FG3M'?'3PM':r.stat;
+    const statLabel=r.stat;
     const rows=r.data.map(p=>{
-      const pct=Math.max(2,Math.round((p.value||0)/maxVal*100));
+      const pct=Math.max(2,Math.round(Math.abs(p.value||0)/maxVal*100));
       const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
       return `<tr>
         <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
@@ -988,6 +1059,22 @@ function renderRankings(r){
     p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
       <div class="sal-table-wrap"><table class="sal-table">
         <thead><tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-g">GP</th><th class="sal-th-salary">${statLabel}</th><th class="sal-th-bar"></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  } else if(r.isTransaction){
+    const rows=r.data.map(t=>{
+      const flagHtml=t.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${t.country}.png" alt="" width="20" height="15">`:'';
+      return `<tr>
+        <td class="tx-date">${t.date}</td>
+        <td class="tx-team">${t.team}</td>
+        <td class="tx-player">${t.player}${flagHtml}</td>
+        <td class="tx-notes">${t.notes}</td>
+        <td class="tx-salary">${t.salary}</td>
+      </tr>`;
+    }).join('');
+    p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
+      <div class="sal-table-wrap"><table class="tx-table">
+        <thead><tr><th class="tx-date">DATE</th><th class="tx-team">TEAM</th><th>PLAYER</th><th>NOTES</th><th style="text-align:right">SALARY</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>`;
   } else if(r.isHistSalary){
@@ -1044,6 +1131,24 @@ function renderRankings(r){
           <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
           <td class="rat-stat">${p.oldRating}</td>
           <td class="rat-stat ${diffCls}">${diffPrefix}${p.diff}</td>
+        </tr>`;
+      }).join('');
+    } else if(r.isLumped){
+      thead=`<tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-g">DRAFT</th><th class="rat-th-rat">RAT</th><th class="rat-th-bar"></th><th class="rat-th-g">G</th><th class="rat-th-stat">PTS</th><th class="rat-th-stat">REB</th><th class="rat-th-stat">AST</th></tr>`;
+      rows=r.data.map(p=>{
+        const pct=Math.max(2,Math.round((parseFloat(p.rating)||0)/maxRat*100));
+        const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
+        return `<tr>
+          <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
+          <td class="sal-player">${p.name}${flagHtml}</td>
+          <td class="hist-team">${p.team||''}</td>
+          <td class="rat-stat">${p.draftYear||''}</td>
+          <td class="rat-val">${p.rating}</td>
+          <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
+          <td class="rat-stat">${p.games||''}</td>
+          <td class="rat-stat">${p.pts}</td>
+          <td class="rat-stat">${p.reb}</td>
+          <td class="rat-stat">${p.ast}</td>
         </tr>`;
       }).join('');
     } else {
@@ -1103,8 +1208,9 @@ function renderRankings(r){
           const p=level.players.find(x=>x.pos===pos);
           if(!p)return `<td class="dep-cell dep-empty">—</td>`;
           const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
+          const qHtml=p.questionable?' <span title="Questionable">❓</span>':'';
           return `<td class="dep-cell">
-            <div class="dep-name">${p.name}${flagHtml}</div>
+            <div class="dep-name">${p.name}${flagHtml}${qHtml}</div>
             <div class="dep-sal">${p.salary||''}</div>
           </td>`;
         }).join('');
@@ -1115,7 +1221,7 @@ function renderRankings(r){
       <div class="sal-table-wrap"><table class="dep-table">
         <thead><tr><th class="dep-th-level"></th>${posLabels.map(p=>`<th class="dep-th-pos">${p}</th>`).join('')}</tr></thead>
         <tbody>${allRows}</tbody>
-      </table></div>`;
+      </table><div class="dep-key">❓ Questionable</div></div>`;
   } else {
     const headerRow=r.columns.map(c=>`<th>${c}</th>`).join('');
     const bodyRows=r.data.map(row=>{
@@ -1254,7 +1360,7 @@ function init(){
   renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);
   setMode(determineAutoMode(MOCK_GAMES));
   // Hash-based section navigation: http://localhost:5000/#depth etc.
-  const hashMap={'#team-ratings':'teamRatings','#stats':'countingStats','#depth':'depth','#injuries':'injuries','#ratings':'ratings','#salaries':'salaries','#history':'histSalaries'};
+  const hashMap={'#team-ratings':'teamRatings','#stats':'countingStats','#depth':'depth','#injuries':'injuries','#ratings':'ratings','#draft':'draftClass','#transactions':'transactions','#salaries':'salaries','#history':'histSalaries'};
   function checkHash(){
     const h=window.location.hash.toLowerCase();
     if(hashMap[h]){
@@ -1279,7 +1385,7 @@ function jumpSection(section){
 }
 function updateNavHighlight(){
   const btns=document.querySelectorAll('.section-btn');
-  const sections=['teamRatings','countingStats','depth','injuries','ratings','salaries','histSalaries'];
+  const sections=['teamRatings','countingStats','depth','injuries','ratings','draftClass','transactions','salaries','histSalaries'];
   let current='';
   for(let i=sections.length-1;i>=0;i--){
     if(sectionStarts[sections[i]]!==undefined&&currentRankingIndex>=sectionStarts[sections[i]]){current=sections[i];break;}
@@ -1297,6 +1403,8 @@ function updateNavHighlight(){
       if(e.key==='d'||e.key==='D')jumpTo(sectionStarts.depth);
       if(e.key==='i'||e.key==='I')jumpTo(sectionStarts.injuries);
       if(e.key==='g'||e.key==='G')jumpTo(sectionStarts.ratings);
+      if(e.key==='y'||e.key==='Y')jumpTo(sectionStarts.draftClass);
+      if(e.key==='x'||e.key==='X')jumpTo(sectionStarts.transactions);
       if(e.key==='s'||e.key==='S')jumpTo(sectionStarts.salaries);
       if(e.key==='h'||e.key==='H')jumpTo(sectionStarts.histSalaries);
       if(e.key==='ArrowRight'){currentRankingIndex=(currentRankingIndex+1)%rankingsScreens.length;renderRankings(rankingsScreens[currentRankingIndex]);updateNavHighlight();}

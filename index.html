@@ -165,6 +165,8 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .mini-team-abbr{font-family:var(--font-display);font-weight:700;font-size:12px;width:36px;color:var(--text-secondary)}
 .mini-score{font-family:var(--font-mono);font-weight:500;font-size:14px;min-width:28px;text-align:right}
 .mini-score.leading{color:var(--accent-bright);font-weight:700}
+.mini-leaders{display:flex;flex-direction:column;gap:0;padding:2px 8px 0;border-top:1px solid rgba(200,165,80,0.06)}
+.mini-ldr{font-family:var(--font-mono);font-size:9px;color:var(--text-tertiary);white-space:nowrap;line-height:1.3}
 .mini-period{font-family:var(--font-mono);font-size:10px;color:var(--live-red);text-align:center;min-width:36px}
 .mini-period.final{color:var(--text-tertiary)}
 .mini-team-logo{width:20px;height:20px;object-fit:contain;flex-shrink:0}
@@ -194,6 +196,9 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .rankings-progress{display:flex;gap:4px}
 .rankings-progress-dot{width:6px;height:6px;border-radius:50%;background:var(--text-muted);transition:background 0.3s,width 0.3s}
 .rankings-progress-dot.active{background:var(--accent);width:18px;border-radius:3px}
+.rankings-next{position:absolute;bottom:8px;left:0;right:0;text-align:center;padding:6px 0}
+.rankings-next-label{font-family:var(--font-heading);font-size:12px;color:var(--accent);letter-spacing:3px;font-weight:700}
+.rankings-next-title{font-family:var(--font-body);font-size:13px;color:var(--text-secondary)}
 .rankings-table{width:100%;border-collapse:collapse}
 .rankings-table th{font-family:var(--font-display);font-weight:600;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-tertiary);text-align:left;padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--border-subtle)}
 .rankings-table th:first-child{width:40px;text-align:center}
@@ -224,8 +229,8 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .sal-bar{height:14px;background:linear-gradient(90deg,rgba(255,140,0,0.5),rgba(255,140,0,0.2));border-radius:2px;min-width:2%}
 .sal-status{font-family:var(--font-body);font-size:11px;color:var(--text-secondary);text-align:right;padding:3px var(--sp-3);white-space:nowrap}
 /* Rating table styles */
-.hist-th-team{width:60px;text-align:left}
-.hist-team{font-family:var(--font-body);font-size:13px;color:var(--text-secondary);padding:3px var(--sp-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60px}
+.hist-th-team{width:105px;text-align:left}
+.hist-team{font-family:var(--font-body);font-size:12px;color:var(--text-secondary);padding:3px var(--sp-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:105px}
 .sal-salary{font-family:var(--font-mono);font-weight:600;font-size:13px;color:var(--accent-bright);padding:3px var(--sp-3);white-space:nowrap;text-align:right}
 .rat-th-rank{width:36px;text-align:center}
 .rat-th-player{width:260px}
@@ -275,6 +280,71 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .tx-player{color:var(--text-primary);font-weight:500}
 .tx-notes{color:var(--text-secondary);font-size:12px}
 .tx-salary{color:var(--text-secondary);font-family:var(--font-mono);font-size:12px;text-align:right;white-space:nowrap}
+.val-salary{font-family:var(--font-mono);font-size:13px;color:var(--text-secondary);padding:3px 8px;white-space:nowrap;text-align:right;width:70px}
+.val-num{font-family:var(--font-mono);font-size:13px;font-weight:600;padding:3px 8px;white-space:nowrap;text-align:right;width:45px}
+.val-th-sal{width:70px;text-align:right}
+.val-th-val{width:45px;text-align:right}
+/* Game Previews */
+.prev-table{width:100%;border-collapse:collapse}
+.prev-th-name{font-family:var(--font-heading);font-size:14px;color:var(--accent);text-align:left;padding:4px 8px;width:22%}
+.prev-th-name-r{text-align:right}
+.prev-th-stat{font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary);text-align:center;padding:4px 2px;width:5%}
+.prev-th-pos{font-family:var(--font-body);font-size:10px;color:var(--text-muted);text-align:center;padding:4px 2px;width:4%}
+.prev-row{border-bottom:1px solid rgba(200,165,80,0.04)}
+.prev-row:hover{background:rgba(200,165,80,0.03)}
+.prev-name{font-family:var(--font-body);font-size:13px;color:var(--text-primary);padding:6px 8px;white-space:nowrap}
+.prev-name-l{text-align:left}
+.prev-name-r{text-align:right}
+.prev-stat{font-family:var(--font-mono);font-size:13px;color:var(--text-tertiary);text-align:center;padding:6px 2px}
+.prev-stat.prev-win{color:var(--accent);font-weight:700}
+.prev-pos{font-family:var(--font-body);font-size:11px;color:var(--text-muted);text-align:center;padding:6px 2px;letter-spacing:1px}
+.prev-agg{border-top:2px solid rgba(200,165,80,0.15)}
+.prev-agg-label{font-family:var(--font-heading);font-size:11px;color:var(--text-tertiary);letter-spacing:1px}
+.prev-agg-val{font-weight:700;font-size:14px}
+.prev-logo{height:20px;width:20px;vertical-align:middle;margin:0 4px}
+.prev-inj-row{border-top:1px solid rgba(200,165,80,0.08)}
+.prev-inj-cell{font-family:var(--font-body);font-size:11px;color:var(--text-tertiary);padding:6px 8px}
+.prev-inj-l{text-align:left}
+.prev-inj-r{text-align:right}
+/* Comparison cards */
+.comp-card{padding:0 var(--sp-4) var(--sp-4);display:flex;flex-direction:column;height:calc(100% - 56px)}
+.comp-header{display:flex;align-items:flex-start;justify-content:space-between;padding:8px 0 12px}
+.comp-player{flex:1}
+.comp-player-l{text-align:right;padding-right:20px}
+.comp-player-r{text-align:left;padding-left:20px}
+.comp-name{font-family:var(--font-heading);font-size:26px;color:var(--text-primary);line-height:1.15;white-space:nowrap}
+.comp-team{font-family:var(--font-body);font-size:14px;color:var(--text-tertiary);margin-top:3px;letter-spacing:0.3px}
+.comp-vs-badge{font-family:var(--font-heading);font-size:11px;color:var(--accent);letter-spacing:3px;flex-shrink:0}
+.comp-score-col{display:flex;flex-direction:column;align-items:center;padding:0 4px;flex-shrink:0}
+.comp-overall{display:flex;align-items:center;gap:4px}
+.comp-overall-num{font-family:var(--font-mono);font-size:22px;color:var(--text-tertiary);font-weight:700}
+.comp-overall-num.comp-win{color:var(--accent)}
+.comp-overall-vs{font-family:var(--font-mono);font-size:14px;color:var(--text-muted)}
+.comp-sec-score{font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary);font-weight:600}
+.comp-sec-win-a .comp-sec-score:first-child{color:var(--accent)}
+.comp-sec-win-b .comp-sec-score:last-child{color:var(--accent)}
+.comp-body{flex:1;overflow-y:auto}
+.comp-sec{margin-bottom:2px}
+.comp-sec-hd{font-family:var(--font-body);font-size:11px;color:var(--accent);letter-spacing:2px;text-align:center;padding:5px 0 2px;opacity:0.7}
+.comp-row{display:flex;align-items:center;height:22px;padding:0 2px}
+.comp-val{font-family:var(--font-mono);font-size:15px;color:var(--text-tertiary);width:58px;flex-shrink:0}
+.comp-val-l{text-align:right}
+.comp-val-r{text-align:left}
+.comp-val.comp-win{color:var(--accent);font-weight:700}
+.comp-bars{flex:1;display:flex;align-items:center;margin:0 4px;height:14px}
+.comp-bar-l{flex:1;display:flex;justify-content:flex-end;height:100%}
+.comp-bar-r{flex:1;display:flex;justify-content:flex-start;height:100%}
+.comp-fill-l,.comp-fill-r{height:100%;border-radius:2px;background:rgba(200,165,80,0.1);min-width:2px;transition:width .3s}
+.comp-fill-l.comp-win,.comp-fill-r.comp-win{background:var(--accent)}
+.comp-fill-l{border-radius:2px 0 0 2px;margin-right:1px}
+.comp-fill-r{border-radius:0 2px 2px 0;margin-left:1px}
+.comp-lbl{font-family:var(--font-body);font-size:11px;color:var(--text-secondary);min-width:70px;text-align:center;letter-spacing:0.3px;padding:0 2px;flex-shrink:0}
+.comp-footer{display:flex;border-top:1px solid rgba(200,165,80,0.08);padding:5px 2px 0;margin-top:3px}
+.comp-foot-col{flex:1;display:flex;flex-direction:column;gap:2px}
+.comp-foot-mid{align-items:center;flex:0 0 auto;padding:0 12px}
+.comp-foot-right{align-items:flex-end}
+.comp-foot-val{font-family:var(--font-mono);font-size:13px;color:var(--text-secondary);line-height:1.4}
+.comp-foot-lbl{font-family:var(--font-body);font-size:10px;color:var(--text-tertiary);letter-spacing:1px;line-height:1.4}
 .dep-row-starters{background:rgba(99,179,237,0.08)}
 .dep-row-starters .dep-level{color:var(--accent-bright)}
 .dep-row-starters .dep-name{color:#fff;font-weight:600}
@@ -304,6 +374,12 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .post-handle{font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary)}
 .post-time{font-family:var(--font-mono);font-size:10px;color:var(--text-muted);flex-shrink:0}
 .post-text{font-family:var(--font-body);font-size:13.5px;line-height:1.45;color:var(--text-primary)}
+.post-images{display:flex;gap:4px;margin-top:6px;border-radius:6px;overflow:hidden}
+.post-img{max-width:100%;max-height:120px;border-radius:6px;object-fit:cover;flex:1;min-width:0}
+.post-quote{margin-top:6px;padding:6px 10px;border-left:2px solid var(--accent);background:rgba(200,165,80,0.04);border-radius:0 4px 4px 0}
+.post-quote-author{font-family:var(--font-body);font-size:11px;font-weight:600;color:var(--text-secondary)}
+.post-quote-handle{font-weight:400;color:var(--text-tertiary)}
+.post-quote-text{font-family:var(--font-body);font-size:12px;color:var(--text-secondary);line-height:1.35;margin-top:2px}
 
 /* ═══ TICKER ═══ */
 .ticker-area{grid-area:ticker;display:flex;align-items:center;background:var(--bg-panel);border-top:1px solid var(--border-subtle);overflow:hidden;position:relative}
@@ -346,7 +422,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
     <div class="mini-scores" id="miniScores"><div class="mini-scores-track" id="miniScoresTrack"></div></div>
     <div class="rankings-mode" id="rankingsMode">
       <div class="next-games-bar"><div class="next-games-label">▶ NEXT GAMES</div><div class="next-games-list" id="nextGamesList"></div></div>
-      <div class="section-nav" id="sectionNav"><button class="section-btn active" data-section="teamRatings" onclick="jumpSection('teamRatings')">Team Ratings [T]</button><button class="section-btn" data-section="countingStats" onclick="jumpSection('countingStats')">Stats [C]</button><button class="section-btn" data-section="depth" onclick="jumpSection('depth')">Depth Charts [D]</button><button class="section-btn" data-section="injuries" onclick="jumpSection('injuries')">Injuries [I]</button><button class="section-btn" data-section="ratings" onclick="jumpSection('ratings')">Global Rating [G]</button><button class="section-btn" data-section="draftClass" onclick="jumpSection('draftClass')">Draft [Y]</button><button class="section-btn" data-section="transactions" onclick="jumpSection('transactions')">Transactions [X]</button><button class="section-btn" data-section="salaries" onclick="jumpSection('salaries')">Salaries [S]</button><button class="section-btn" data-section="histSalaries" onclick="jumpSection('histSalaries')">History [H]</button><span class="section-nav-hint">← → browse</span></div>
+      <div class="section-nav" id="sectionNav"><button class="section-btn active" data-section="teamRatings" onclick="jumpSection('teamRatings')">Team Ratings [T]</button><button class="section-btn" data-section="countingStats" onclick="jumpSection('countingStats')">Stats [C]</button><button class="section-btn" data-section="depth" onclick="jumpSection('depth')">Depth Charts [D]</button><button class="section-btn" data-section="injuries" onclick="jumpSection('injuries')">Injuries [I]</button><button class="section-btn" data-section="ratings" onclick="jumpSection('ratings')">Global Rating [G]</button><button class="section-btn" data-section="draftClass" onclick="jumpSection('draftClass')">Draft [Y]</button><button class="section-btn" data-section="transactions" onclick="jumpSection('transactions')">Transactions [X]</button><button class="section-btn" data-section="value" onclick="jumpSection('value')">Value [V]</button><button class="section-btn" data-section="matchups" onclick="jumpSection('matchups')">Matchups [M]</button><button class="section-btn" data-section="previews" onclick="jumpSection('previews')">Previews [P]</button><button class="section-btn" data-section="salaries" onclick="jumpSection('salaries')">Salaries [S]</button><button class="section-btn" data-section="histSalaries" onclick="jumpSection('histSalaries')">History [H]</button><span class="section-nav-hint">← → browse</span></div>
       <div class="rankings-panel" id="rankingsPanel"></div>
     </div>
   </main>
@@ -457,6 +533,9 @@ let histSalariesData=null;
 let countingStatsData=null;
 let draftClassData=null;
 let transactionsData=null;
+let valueData=null;
+let comparisonsData=null;
+let previewsData=null;
 let rankingsScreens=[];
 let sectionStarts={};  // {teamRatings:0, depth:10, injuries:25, ratings:30, salaries:38}
 function buildRankingsScreens(){
@@ -563,6 +642,77 @@ function buildRankingsScreens(){
         isTransaction:true,
         data:scr.transactions
       });
+    }
+  }
+  // Value ranking screens
+  if(valueData&&valueData.screens){
+    sectionStarts.value=rankingsScreens.length;
+    for(const scr of valueData.screens){
+      rankingsScreens.push({
+        title:scr.title,
+        source:scr.subtitle,
+        isValue:true,
+        isBestValue:scr.isBestValue,
+        data:scr.players.map(p=>({
+          rank:p.rank,
+          name:p.name,
+          team:p.team,
+          rating:p.ratingDisplay,
+          salary:p.salaryCompact,
+          value:p.value,
+          games:p.games,
+          country:p.country
+        }))
+      });
+    }
+  }
+  // Comparison screens (matchups, positional, All-Star H2H)
+  if(comparisonsData&&comparisonsData.screens){
+    sectionStarts.matchups=rankingsScreens.length;
+    for(const scr of comparisonsData.screens){
+      if(scr.isPositional){
+        rankingsScreens.push({
+          title:scr.title,
+          source:scr.subtitle,
+          isPositional:true,
+          data:scr.players.map(p=>({
+            rank:p.rank,name:p.name,team:p.team,
+            rating:p.ratingDisplay,games:p.games,
+            pts:p.pts,reb:p.reb,ast:p.ast,
+            country:p.country
+          }))
+        });
+      } else if(scr.isComparison){
+        rankingsScreens.push({
+          title:scr.title,
+          source:scr.subtitle,
+          isComparison:true,
+          compType:scr.compType,
+          playerA:scr.playerA,
+          playerB:scr.playerB,
+          sections:scr.sections,
+          scoreA:scr.scoreA||0,
+          scoreB:scr.scoreB||0
+        });
+      } else if(scr.isPreview){
+        if(sectionStarts.previews===undefined) sectionStarts.previews=rankingsScreens.length;
+        rankingsScreens.push({
+          title:scr.title,
+          source:scr.subtitle,
+          isPreview:true,
+          awayCity:scr.awayCity,
+          homeCity:scr.homeCity,
+          awayAbbr:scr.awayAbbr,
+          homeAbbr:scr.homeAbbr,
+          awayTeamId:scr.awayTeamId,
+          homeTeamId:scr.homeTeamId,
+          matchups:scr.matchups,
+          awayTotals:scr.awayTotals,
+          homeTotals:scr.homeTotals,
+          awayInjuries:scr.awayInjuries||[],
+          homeInjuries:scr.homeInjuries||[]
+        });
+      }
     }
   }
   // Salary screens
@@ -694,6 +844,33 @@ function pollTransactions(){
     }
   }).catch(e=>console.warn('Transactions fetch error:',e));
 }
+function pollValue(){
+  fetch('/api/value').then(r=>r.json()).then(data=>{
+    if(data&&data.screens&&data.screens.length>0){
+      valueData=data;
+      buildRankingsScreens();
+      console.log('Value rankings loaded:',data.count,'screens');
+    }
+  }).catch(e=>console.warn('Value rankings fetch error:',e));
+}
+function pollComparisons(){
+  fetch('/api/comparisons').then(r=>r.json()).then(data=>{
+    if(data&&data.screens&&data.screens.length>0){
+      comparisonsData=data;
+      buildRankingsScreens();
+      console.log('Comparisons loaded:',data.count,'screens');
+    }
+  }).catch(e=>console.warn('Comparisons fetch error:',e));
+}
+function pollPreviews(){
+  fetch('/api/previews').then(r=>r.json()).then(data=>{
+    if(data&&data.screens&&data.screens.length>0){
+      previewsData=data;
+      buildRankingsScreens();
+      console.log('Previews loaded:',data.count,'screens');
+    }
+  }).catch(e=>console.warn('Previews fetch error:',e));
+}
 pollSalaries();
 pollRatings();
 pollInjuries();
@@ -703,6 +880,9 @@ pollHistSalaries();
 pollCountingStats();
 pollDraftClasses();
 pollTransactions();
+pollValue();
+pollComparisons();
+pollPreviews();
 setInterval(pollSalaries,30*60*1000);
 setInterval(pollRatings,30*60*1000);
 setInterval(pollInjuries,15*60*1000);
@@ -712,6 +892,9 @@ setInterval(pollHistSalaries,60*60*1000);
 setInterval(pollCountingStats,30*60*1000);
 setInterval(pollDraftClasses,30*60*1000);
 setInterval(pollTransactions,15*60*1000);
+setInterval(pollValue,30*60*1000);
+setInterval(pollComparisons,5*60*1000);
+setInterval(pollPreviews,15*60*1000);
 
 const MOCK_HEADLINES=[
   {text:'Lakers exploring trade options for additional wing depth ahead of deadline',isNew:true,time:'12m'},
@@ -998,7 +1181,22 @@ function rotateGame(){
 
 function renderMiniScores(games,activeId){
   const track=document.getElementById('miniScoresTrack');
-  track.innerHTML=games.map(g=>`<div class="mini-game ${g.id===activeId?'active':''}" data-gid="${g.id}"><div class="mini-period ${g.status==='final'?'final':''}">${g.status==='final'?'FINAL':(g.status==='scheduled'?g.clock||'—':g.clock)}</div><div class="mini-teams"><div class="mini-team-row">${g.away.teamId?`<img class="mini-team-logo" src="https://cdn.nba.com/logos/nba/${g.away.teamId}/primary/L/logo.svg" onerror="this.style.display='none'">`:''}<span class="mini-team-abbr">${g.away.abbr}</span><span class="mini-score ${g.away.score>g.home.score?'leading':''}">${g.away.score}</span></div><div class="mini-team-row">${g.home.teamId?`<img class="mini-team-logo" src="https://cdn.nba.com/logos/nba/${g.home.teamId}/primary/L/logo.svg" onerror="this.style.display='none'">`:''}<span class="mini-team-abbr">${g.home.abbr}</span><span class="mini-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div></div></div>`).join('');
+  track.innerHTML=games.map(g=>{
+    // Find game leaders (best across both teams for PTS/REB/AST)
+    let leadersHtml='';
+    if(g.status!=='scheduled' && g.away.leaders && g.home.leaders){
+      const cats=['pts','reb','ast'];
+      const labels=['PTS','REB','AST'];
+      const ldrs=cats.map((c,i)=>{
+        const aw=g.away.leaders[c]||{name:'—',val:0};
+        const hm=g.home.leaders[c]||{name:'—',val:0};
+        const best=(aw.val||0)>=(hm.val||0)?aw:hm;
+        return `<span class="mini-ldr">${labels[i]}: ${best.name} ${best.val}</span>`;
+      });
+      leadersHtml=`<div class="mini-leaders">${ldrs.join('')}</div>`;
+    }
+    return `<div class="mini-game ${g.id===activeId?'active':''}" data-gid="${g.id}"><div class="mini-period ${g.status==='final'?'final':''}">${g.status==='final'?'FINAL':(g.status==='scheduled'?g.clock||'—':(g.period?g.period+' '+g.clock:g.clock))}</div><div class="mini-teams"><div class="mini-team-row">${g.away.teamId?`<img class="mini-team-logo" src="https://cdn.nba.com/logos/nba/${g.away.teamId}/primary/L/logo.svg" onerror="this.style.display='none'">`:''}<span class="mini-team-abbr">${g.away.abbr}</span><span class="mini-score ${g.away.score>g.home.score?'leading':''}">${g.away.score}</span></div><div class="mini-team-row">${g.home.teamId?`<img class="mini-team-logo" src="https://cdn.nba.com/logos/nba/${g.home.teamId}/primary/L/logo.svg" onerror="this.style.display='none'">`:''}<span class="mini-team-abbr">${g.home.abbr}</span><span class="mini-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div></div>${leadersHtml}</div>`;
+  }).join('');
   // Scroll track so active game is centered
   requestAnimationFrame(()=>{
     const container=document.getElementById('miniScores');
@@ -1029,7 +1227,18 @@ function renderFeed(posts){
       ?`<img class="post-avatar-img" src="${p.avatarUrl}" alt="" width="28" height="28" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`
       :fb;
     const txt=p.text.length>280?p.text.slice(0,277)+'...':p.text;
-    return `<div class="feed-post" style="animation-delay:${i*0.05}s"><div class="post-header"><div class="post-avatar-wrap" data-fb="${fb.replace(/"/g,'&quot;')}">${av}</div><div class="post-meta"><div class="post-author">${p.author}</div><div class="post-handle">${p.handle}</div></div><div class="post-time">${p.time}</div></div><div class="post-text">${txt}</div></div>`;
+    // Images
+    let imgHtml='';
+    if(p.images&&p.images.length>0){
+      imgHtml=`<div class="post-images">${p.images.map(u=>`<img class="post-img" src="${u}" alt="" loading="lazy" onerror="this.style.display='none'">`).join('')}</div>`;
+    }
+    // Quote post
+    let quoteHtml='';
+    if(p.quote&&p.quote.text){
+      const qt=p.quote.text.length>160?p.quote.text.slice(0,157)+'...':p.quote.text;
+      quoteHtml=`<div class="post-quote"><div class="post-quote-author">${p.quote.author||''} <span class="post-quote-handle">${p.quote.handle||''}</span></div><div class="post-quote-text">${qt}</div></div>`;
+    }
+    return `<div class="feed-post" style="animation-delay:${i*0.05}s"><div class="post-header"><div class="post-avatar-wrap" data-fb="${fb.replace(/"/g,'&quot;')}">${av}</div><div class="post-meta"><div class="post-author">${p.author}</div><div class="post-handle">${p.handle}</div></div><div class="post-time">${p.time}</div></div><div class="post-text">${txt}</div>${imgHtml}${quoteHtml}</div>`;
   }).join('');
 }
 
@@ -1052,15 +1261,205 @@ function renderRankings(r){
         <td class="sal-player">${p.name}${flagHtml}</td>
         <td class="hist-team">${p.team}</td>
         <td class="rat-stat">${p.gp}</td>
-        <td class="sal-salary">${p.valueDisplay}</td>
+        <td class="rat-val">${p.valueDisplay}</td>
         <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
       </tr>`;
     }).join('');
     p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
       <div class="sal-table-wrap"><table class="sal-table">
-        <thead><tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-g">GP</th><th class="sal-th-salary">${statLabel}</th><th class="sal-th-bar"></th></tr></thead>
+        <thead><tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-g">GP</th><th class="rat-th-rat">${statLabel}</th><th class="rat-th-bar"></th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>`;
+  } else if(r.isValue){
+    const maxVal=Math.max(...r.data.map(p=>p.value||0),1);
+    const rows=r.data.map(p=>{
+      const pct=Math.max(2,Math.round((p.value||0)/maxVal*100));
+      const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
+      const valColor=r.isBestValue?'color:var(--accent)':'color:#e87461';
+      return `<tr>
+        <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
+        <td class="sal-player">${p.name}${flagHtml}</td>
+        <td class="rat-val">${p.rating}</td>
+        <td class="val-salary">${p.salary}</td>
+        <td class="val-num" style="${valColor}">${p.value}</td>
+        <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%;${r.isBestValue?'':'background:linear-gradient(90deg,#e87461,#c0392b)'}"></div></td>
+        <td class="rat-stat">${p.games||''}</td>
+      </tr>`;
+    }).join('');
+    p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
+      <div class="sal-table-wrap"><table class="sal-table">
+        <thead><tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="rat-th-rat">RAT</th><th class="val-th-sal">SALARY</th><th class="val-th-val">VAL</th><th class="sal-th-bar"></th><th class="rat-th-g">G</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  } else if(r.isPositional){
+    const rows=r.data.map(p=>{
+      const pct=Math.max(2,Math.round((p.rating||0)/r.data[0].rating*100));
+      const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
+      return `<tr>
+        <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
+        <td class="sal-player">${p.name}${flagHtml}</td>
+        <td class="hist-team">${p.team}</td>
+        <td class="rat-val">${p.rating}</td>
+        <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
+        <td class="rat-stat">${p.games||''}</td>
+        <td class="rat-stat">${p.pts||''}</td>
+        <td class="rat-stat">${p.reb||''}</td>
+        <td class="rat-stat">${p.ast||''}</td>
+      </tr>`;
+    }).join('');
+    p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
+      <div class="sal-table-wrap"><table class="sal-table">
+        <thead><tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-rat">RAT</th><th class="sal-th-bar"></th><th class="rat-th-g">G</th><th class="rat-th-stat">PTS</th><th class="rat-th-stat">REB</th><th class="rat-th-stat">AST</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  } else if(r.isPreview){
+    // Game Preview screen — 5v5 starter matchup
+    function prevRow(m){
+      const ap=m.away, hp=m.home;
+      const aflag=ap.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${ap.country}.png" width="16" height="12">`:'';
+      const hflag=hp.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${hp.country}.png" width="16" height="12">`:'';
+      const aq=ap.questionable?' <span style="font-size:10px">❓</span>':'';
+      const hq=hp.questionable?' <span style="font-size:10px">❓</span>':'';
+      const aRatW=ap.rating>hp.rating?' prev-win':'';
+      const hRatW=hp.rating>ap.rating?' prev-win':'';
+      const aPtsW=ap.pts>hp.pts?' prev-win':'';
+      const hPtsW=hp.pts>ap.pts?' prev-win':'';
+      const aRebW=ap.reb>hp.reb?' prev-win':'';
+      const hRebW=hp.reb>ap.reb?' prev-win':'';
+      const aAstW=ap.ast>hp.ast?' prev-win':'';
+      const hAstW=hp.ast>ap.ast?' prev-win':'';
+      return `<tr class="prev-row">
+        <td class="prev-name prev-name-l">${ap.name}${aflag}${aq}</td>
+        <td class="prev-stat${aRatW}">${ap.rating||'—'}</td>
+        <td class="prev-stat${aPtsW}">${ap.pts}</td>
+        <td class="prev-stat${aRebW}">${ap.reb}</td>
+        <td class="prev-stat${aAstW}">${ap.ast}</td>
+        <td class="prev-pos">${m.pos}</td>
+        <td class="prev-stat${hPtsW}">${hp.pts}</td>
+        <td class="prev-stat${hRebW}">${hp.reb}</td>
+        <td class="prev-stat${hAstW}">${hp.ast}</td>
+        <td class="prev-stat${hRatW}">${hp.rating||'—'}</td>
+        <td class="prev-name prev-name-r">${hq}${hflag} ${hp.name}</td>
+      </tr>`;
+    }
+    let matchRows=(r.matchups||[]).map(m=>prevRow(m)).join('');
+
+    // Team aggregates
+    const at=r.awayTotals||{}, ht=r.homeTotals||{};
+    const ratWA=at.rating>ht.rating?' prev-win':'';
+    const ratWH=ht.rating>at.rating?' prev-win':'';
+    const ptsWA=at.pts>ht.pts?' prev-win':'';
+    const ptsWH=ht.pts>at.pts?' prev-win':'';
+    const rebWA=at.reb>ht.reb?' prev-win':'';
+    const rebWH=ht.reb>at.reb?' prev-win':'';
+    const astWA=at.ast>ht.ast?' prev-win':'';
+    const astWH=ht.ast>at.ast?' prev-win':'';
+    const aggRow=`<tr class="prev-agg">
+      <td class="prev-name prev-name-l prev-agg-label">TEAM AVG</td>
+      <td class="prev-stat prev-agg-val${ratWA}">${at.rating}</td>
+      <td class="prev-stat prev-agg-val${ptsWA}">${at.pts}</td>
+      <td class="prev-stat prev-agg-val${rebWA}">${at.reb}</td>
+      <td class="prev-stat prev-agg-val${astWA}">${at.ast}</td>
+      <td class="prev-pos"></td>
+      <td class="prev-stat prev-agg-val${ptsWH}">${ht.pts}</td>
+      <td class="prev-stat prev-agg-val${rebWH}">${ht.reb}</td>
+      <td class="prev-stat prev-agg-val${astWH}">${ht.ast}</td>
+      <td class="prev-stat prev-agg-val${ratWH}">${ht.rating}</td>
+      <td class="prev-name prev-name-r prev-agg-label">TEAM AVG</td>
+    </tr>`;
+
+    // Injuries row
+    let injHtml='';
+    const aInj=r.awayInjuries||[], hInj=r.homeInjuries||[];
+    if(aInj.length||hInj.length){
+      const aInjStr=aInj.map(x=>`❓ ${x.name} (${x.rating})`).join(', ')||'None reported';
+      const hInjStr=hInj.map(x=>`❓ ${x.name} (${x.rating})`).join(', ')||'None reported';
+      injHtml=`<tr class="prev-inj-row"><td colspan="5" class="prev-inj-cell prev-inj-l">${aInjStr}</td><td class="prev-pos" style="font-size:9px;letter-spacing:1px">INJ</td><td colspan="5" class="prev-inj-cell prev-inj-r">${hInjStr}</td></tr>`;
+    }
+
+    // Team logos
+    const aLogo=r.awayTeamId?`<img class="prev-logo" src="https://cdn.nba.com/logos/nba/${r.awayTeamId}/primary/L/logo.svg" onerror="this.style.display='none'">`:'';
+    const hLogo=r.homeTeamId?`<img class="prev-logo" src="https://cdn.nba.com/logos/nba/${r.homeTeamId}/primary/L/logo.svg" onerror="this.style.display='none'">`:'';
+
+    p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">🏀 ${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
+      <div class="sal-table-wrap"><table class="prev-table">
+        <thead><tr>
+          <th class="prev-th-name">${aLogo} ${r.awayCity}</th>
+          <th class="prev-th-stat">RAT</th><th class="prev-th-stat">PTS</th><th class="prev-th-stat">REB</th><th class="prev-th-stat">AST</th>
+          <th class="prev-th-pos">POS</th>
+          <th class="prev-th-stat">PTS</th><th class="prev-th-stat">REB</th><th class="prev-th-stat">AST</th><th class="prev-th-stat">RAT</th>
+          <th class="prev-th-name prev-th-name-r">${r.homeCity} ${hLogo}</th>
+        </tr></thead>
+        <tbody>${matchRows}${aggRow}${injHtml}</tbody>
+      </table></div>`;
+  } else if(r.isComparison){
+    const a=r.playerA,b=r.playerB;
+    const flagA=a.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${a.country}.png" width="20" height="15">`:'';
+    const flagB=b.country?`<img class="sal-flag" src="https://flagcdn.com/w20/${b.country}.png" width="20" height="15"> `:'';
+    const typeIcon=r.compType==='matchup'?'🏀':'⭐';
+
+    function fmtVal(v,fmt){
+      if(fmt==='pct'){const x=v*100;return x.toFixed(1)+'%';}
+      if(fmt==='spct'){const x=v*100;return (x>0?'+':'')+x.toFixed(1)+'%';}
+      if(fmt==='2') return v.toFixed(2);
+      if(fmt==='0') return Math.round(v).toString();
+      if(fmt==='s1') return (v>=0?'+':'')+v.toFixed(1);
+      return v.toFixed(1);
+    }
+
+    let sectionsHtml='';
+    for(const sec of r.sections){
+      let rowsHtml='';
+      for(const c of sec.stats){
+        const maxV=Math.max(Math.abs(c.valA),Math.abs(c.valB),0.01);
+        const pctA=Math.round(Math.abs(c.valA)/maxV*100);
+        const pctB=Math.round(Math.abs(c.valB)/maxV*100);
+        const winA=c.winner==='A'?' comp-win':'';
+        const winB=c.winner==='B'?' comp-win':'';
+        rowsHtml+=`<div class="comp-row">
+          <div class="comp-val comp-val-l${winA}">${fmtVal(c.valA,c.fmt)}</div>
+          <div class="comp-bars">
+            <div class="comp-bar-l"><div class="comp-fill-l${winA}" style="width:${pctA}%"></div></div>
+            <div class="comp-lbl">${c.label}</div>
+            <div class="comp-bar-r"><div class="comp-fill-r${winB}" style="width:${pctB}%"></div></div>
+          </div>
+          <div class="comp-val comp-val-r${winB}">${fmtVal(c.valB,c.fmt)}</div>
+        </div>`;
+      }
+      const secScA=sec.scoreA||0, secScB=sec.scoreB||0;
+      const secWinCls=secScA>secScB?' comp-sec-win-a':secScB>secScA?' comp-sec-win-b':'';
+      sectionsHtml+=`<div class="comp-sec"><div class="comp-sec-hd${secWinCls}"><span class="comp-sec-score">${secScA}</span> ${sec.label} <span class="comp-sec-score">${secScB}</span></div>${rowsHtml}</div>`;
+    }
+
+    // Overall score
+    const scA=r.scoreA||0, scB=r.scoreB||0;
+    const overallWinA=scA>scB, overallWinB=scB>scA;
+
+    const footer=`<div class="comp-footer">
+      <div class="comp-foot-col"><div class="comp-foot-val">${a.gp!==undefined?a.gp:'—'}</div><div class="comp-foot-val">${a.salary||'—'}</div></div>
+      <div class="comp-foot-col comp-foot-mid"><div class="comp-foot-lbl">GP</div><div class="comp-foot-lbl">SALARY</div></div>
+      <div class="comp-foot-col comp-foot-right"><div class="comp-foot-val">${b.gp!==undefined?b.gp:'—'}</div><div class="comp-foot-val">${b.salary||'—'}</div></div>
+    </div>`;
+
+    p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${typeIcon} ${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
+      <div class="comp-card">
+        <div class="comp-header">
+          <div class="comp-player comp-player-l">
+            <div class="comp-name">${a.name}${flagA}</div>
+            <div class="comp-team">${a.team}</div>
+          </div>
+          <div class="comp-score-col">
+            <div class="comp-overall"><span class="comp-overall-num${overallWinA?' comp-win':''}">${scA}</span><span class="comp-overall-vs">–</span><span class="comp-overall-num${overallWinB?' comp-win':''}">${scB}</span></div>
+            <div class="comp-vs-badge">VS</div>
+          </div>
+          <div class="comp-player comp-player-r">
+            <div class="comp-name">${flagB}${b.name}</div>
+            <div class="comp-team">${b.team}</div>
+          </div>
+        </div>
+        <div class="comp-body">${sectionsHtml}</div>
+        ${footer}
+      </div>`;
   } else if(r.isTransaction){
     const rows=r.data.map(t=>{
       const flagHtml=t.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${t.country}.png" alt="" width="20" height="15">`:'';
@@ -1235,8 +1634,17 @@ function renderRankings(r){
     p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
       <table class="rankings-table"><thead><tr>${headerRow}</tr></thead><tbody>${bodyRows}</tbody></table>`;
   }
-}
-let nextGamesPages=[];let currentNextGamesPage=0;
+  // Add "NEXT" preview at bottom
+  const nextIdx=(currentRankingIndex+1)%rankingsScreens.length;
+  if(rankingsScreens.length>1){
+    const nextScreen=rankingsScreens[nextIdx];
+    const nextTitle=nextScreen.title||'';
+    const nextDiv=document.createElement('div');
+    nextDiv.className='rankings-next';
+    nextDiv.innerHTML=`<span class="rankings-next-label">NEXT ▸</span> <span class="rankings-next-title">${nextTitle}</span>`;
+    p.appendChild(nextDiv);
+  }
+}let currentNextGamesPage=0;
 function renderNextGames(games){
   const perPage=5;
   nextGamesPages=[];
@@ -1360,7 +1768,7 @@ function init(){
   renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);
   setMode(determineAutoMode(MOCK_GAMES));
   // Hash-based section navigation: http://localhost:5000/#depth etc.
-  const hashMap={'#team-ratings':'teamRatings','#stats':'countingStats','#depth':'depth','#injuries':'injuries','#ratings':'ratings','#draft':'draftClass','#transactions':'transactions','#salaries':'salaries','#history':'histSalaries'};
+  const hashMap={'#team-ratings':'teamRatings','#stats':'countingStats','#depth':'depth','#injuries':'injuries','#ratings':'ratings','#draft':'draftClass','#transactions':'transactions','#value':'value','#matchups':'matchups','#salaries':'salaries','#history':'histSalaries'};
   function checkHash(){
     const h=window.location.hash.toLowerCase();
     if(hashMap[h]){
@@ -1385,7 +1793,7 @@ function jumpSection(section){
 }
 function updateNavHighlight(){
   const btns=document.querySelectorAll('.section-btn');
-  const sections=['teamRatings','countingStats','depth','injuries','ratings','draftClass','transactions','salaries','histSalaries'];
+  const sections=['teamRatings','countingStats','depth','injuries','ratings','draftClass','transactions','value','matchups','salaries','histSalaries'];
   let current='';
   for(let i=sections.length-1;i>=0;i--){
     if(sectionStarts[sections[i]]!==undefined&&currentRankingIndex>=sectionStarts[sections[i]]){current=sections[i];break;}
@@ -1405,6 +1813,9 @@ function updateNavHighlight(){
       if(e.key==='g'||e.key==='G')jumpTo(sectionStarts.ratings);
       if(e.key==='y'||e.key==='Y')jumpTo(sectionStarts.draftClass);
       if(e.key==='x'||e.key==='X')jumpTo(sectionStarts.transactions);
+      if(e.key==='v'||e.key==='V')jumpTo(sectionStarts.value);
+      if(e.key==='m'||e.key==='M')jumpTo(sectionStarts.matchups);
+      if(e.key==='p'||e.key==='P')jumpTo(sectionStarts.previews);
       if(e.key==='s'||e.key==='S')jumpTo(sectionStarts.salaries);
       if(e.key==='h'||e.key==='H')jumpTo(sectionStarts.histSalaries);
       if(e.key==='ArrowRight'){currentRankingIndex=(currentRankingIndex+1)%rankingsScreens.length;renderRankings(rankingsScreens[currentRankingIndex]);updateNavHighlight();}

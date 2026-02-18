@@ -299,14 +299,14 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .comp-vs-badge{font-family:var(--font-heading);font-size:9px;color:var(--text-tertiary);letter-spacing:2px}
 .comp-body{overflow:hidden}
 .comp-sec{margin-bottom:1px}
-.comp-sec-hd{font-family:var(--font-heading);font-size:11px;color:var(--text-tertiary);letter-spacing:2px;text-align:center;padding:3px 0 1px;display:flex;justify-content:center;gap:8px}
+.comp-sec-hd{font-family:var(--font-heading);font-size:11px;color:rgba(255,255,255,0.65);letter-spacing:2px;text-align:center;padding:3px 0 1px;display:flex;justify-content:center;gap:8px}
 .comp-sec-win{color:var(--accent-bright);font-weight:700}
 .comp-row{display:flex;align-items:center;height:22px;gap:0}
 .comp-val{font-family:var(--font-mono);font-size:15px;color:var(--text-secondary);width:46px;flex-shrink:0}
 .comp-val-a{text-align:right;padding-right:6px}
 .comp-val-b{text-align:left;padding-left:6px}
 .comp-val-win{color:var(--accent-bright)!important;font-weight:700}
-.comp-lbl{font-family:var(--font-body);font-size:11px;color:var(--text-tertiary);width:70px;text-align:center;flex-shrink:0}
+.comp-lbl{font-family:var(--font-body);font-size:11px;color:rgba(255,255,255,0.7);width:70px;text-align:center;flex-shrink:0}
 .comp-bar-wrap{flex:1;height:10px;position:relative;overflow:hidden}
 .comp-bar-left{direction:rtl}
 .comp-bar{height:100%;border-radius:2px;min-width:2px}
@@ -507,6 +507,8 @@ let valueData=null;
 let comparisonsData=null;
 let rankingsScreens=[];
 let sectionStarts={};  // {teamRatings:0, depth:10, injuries:25, ratings:30, salaries:38}
+const _TEAM_FULL={ATL:'Atlanta',BOS:'Boston',BKN:'Brooklyn',CHA:'Charlotte',CHI:'Chicago',CLE:'Cleveland',DAL:'Dallas',DEN:'Denver',DET:'Detroit',GSW:'Golden State',HOU:'Houston',IND:'Indiana',LAC:'LA Clippers',LAL:'LA Lakers',MEM:'Memphis',MIA:'Miami',MIL:'Milwaukee',MIN:'Minnesota',NOP:'New Orleans',NYK:'New York',OKC:'Oklahoma City',ORL:'Orlando',PHI:'Philadelphia',PHX:'Phoenix',POR:'Portland',SAC:'Sacramento',SAS:'San Antonio',TOR:'Toronto',UTA:'Utah',WAS:'Washington'};
+function teamFull(t){return _TEAM_FULL[t]||_TEAM_FULL[t&&t.toUpperCase()]||t;}
 function buildRankingsScreens(){
   rankingsScreens=[];
   sectionStarts={};
@@ -518,6 +520,7 @@ function buildRankingsScreens(){
         title:'Global Rating — '+scr.title,
         source:scr.subtitle,
         isRating:true,
+        isTeamRating:true,
         isForm:false,
         data:scr.players
       });
@@ -626,19 +629,11 @@ function buildRankingsScreens(){
       });
     }
   }
-  // Comparison screens (positional, matchups, all-star)
+  // Comparison screens (matchups, all-star H2H)
   if(comparisonsData&&comparisonsData.screens){
     sectionStarts.matchups=rankingsScreens.length;
     for(const scr of comparisonsData.screens){
-      if(scr.isPositional){
-        rankingsScreens.push({
-          title:scr.title,
-          source:scr.subtitle,
-          isRating:true,
-          isForm:false,
-          data:scr.players
-        });
-      } else if(scr.isComparison){
+      if(scr.isComparison){
         rankingsScreens.push({
           title:scr.title,
           source:scr.subtitle,
@@ -1200,7 +1195,7 @@ function renderRankings(r){
       return `<tr>
         <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
         <td class="sal-player">${p.name}${flagHtml}</td>
-        <td class="hist-team">${p.team}</td>
+        <td class="hist-team">${teamFull(p.team)}</td>
         <td class="rat-stat">${p.gp}</td>
         <td class="sal-salary">${p.valueDisplay}</td>
         <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
@@ -1237,6 +1232,7 @@ function renderRankings(r){
       return `<tr>
         <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
         <td class="sal-player">${p.name}${flagHtml}</td>
+        <td class="hist-team">${teamFull(p.team||'')}</td>
         <td class="rat-val">${p.ratingDisplay}</td>
         <td class="val-salary">${p.salaryCompact}</td>
         <td class="val-num" style="${valColor}">${p.value.toFixed(1)}</td>
@@ -1246,7 +1242,7 @@ function renderRankings(r){
     }).join('');
     p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
       <div class="sal-table-wrap"><table class="sal-table">
-        <thead><tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="rat-th-rat">RAT</th><th class="val-th-sal">SALARY</th><th class="val-th-val">VAL</th><th class="sal-th-bar"></th><th class="rat-th-g">G</th></tr></thead>
+        <thead><tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-rat">RAT</th><th class="val-th-sal">SALARY</th><th class="val-th-val">VAL</th><th class="sal-th-bar"></th><th class="rat-th-g">G</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>`;
   } else if(r.isHistSalary){
@@ -1257,7 +1253,7 @@ function renderRankings(r){
       return `<tr>
         <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
         <td class="sal-player">${p.name}${flagHtml}</td>
-        <td class="hist-team">${p.team}</td>
+        <td class="hist-team">${teamFull(p.team)}</td>
         <td class="sal-salary">${p.salaryDisplay}</td>
         <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
       </tr>`;
@@ -1288,7 +1284,6 @@ function renderRankings(r){
     const c=r.comparison;
     function fmtVal(v,fmt){
       if(v===null||v===undefined)return '—';
-      if(fmt==='2')return parseFloat(v).toFixed(2);
       if(fmt==='s1'){const n=parseFloat(v);return (n>0?'+':'')+n.toFixed(1);}
       return parseFloat(v).toFixed(1);
     }
@@ -1356,7 +1351,7 @@ function renderRankings(r){
         return `<tr>
           <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
           <td class="sal-player">${p.name}${flagHtml}</td>
-          <td class="hist-team">${p.team||''}</td>
+          <td class="hist-team">${teamFull(p.team||'')}</td>
           <td class="rat-val">${p.rating}</td>
           <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
           <td class="rat-stat">${p.oldRating}</td>
@@ -1371,7 +1366,7 @@ function renderRankings(r){
         return `<tr>
           <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
           <td class="sal-player">${p.name}${flagHtml}</td>
-          <td class="hist-team">${p.team||''}</td>
+          <td class="hist-team">${teamFull(p.team||'')}</td>
           <td class="rat-stat">${p.draftYear||''}</td>
           <td class="rat-val">${p.rating}</td>
           <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
@@ -1382,22 +1377,40 @@ function renderRankings(r){
         </tr>`;
       }).join('');
     } else {
-      thead=`<tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-rat">RAT</th><th class="rat-th-bar"></th><th class="rat-th-g">G</th><th class="rat-th-stat">PTS</th><th class="rat-th-stat">REB</th><th class="rat-th-stat">AST</th></tr>`;
-      rows=r.data.map(p=>{
-        const pct=Math.max(2,Math.round((parseFloat(p.rating)||0)/maxRat*100));
-        const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
-        return `<tr>
-          <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
-          <td class="sal-player">${p.name}${flagHtml}</td>
-          <td class="hist-team">${p.team||''}</td>
-          <td class="rat-val">${p.rating}</td>
-          <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
-          <td class="rat-stat">${p.games||''}</td>
-          <td class="rat-stat">${p.pts}</td>
-          <td class="rat-stat">${p.reb}</td>
-          <td class="rat-stat">${p.ast}</td>
-        </tr>`;
-      }).join('');
+      if(r.isTeamRating){
+        thead=`<tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="rat-th-rat">RAT</th><th class="rat-th-bar"></th><th class="rat-th-g">G</th><th class="rat-th-stat">PTS</th><th class="rat-th-stat">REB</th><th class="rat-th-stat">AST</th></tr>`;
+        rows=r.data.map(p=>{
+          const pct=Math.max(2,Math.round((parseFloat(p.rating)||0)/maxRat*100));
+          const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
+          return `<tr>
+            <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
+            <td class="sal-player">${p.name}${flagHtml}</td>
+            <td class="rat-val">${p.rating}</td>
+            <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
+            <td class="rat-stat">${p.games||''}</td>
+            <td class="rat-stat">${p.pts}</td>
+            <td class="rat-stat">${p.reb}</td>
+            <td class="rat-stat">${p.ast}</td>
+          </tr>`;
+        }).join('');
+      } else {
+        thead=`<tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-rat">RAT</th><th class="rat-th-bar"></th><th class="rat-th-g">G</th><th class="rat-th-stat">PTS</th><th class="rat-th-stat">REB</th><th class="rat-th-stat">AST</th></tr>`;
+        rows=r.data.map(p=>{
+          const pct=Math.max(2,Math.round((parseFloat(p.rating)||0)/maxRat*100));
+          const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
+          return `<tr>
+            <td class="rat-rank"><span class="rank-num ${p.rank<=3?'top-3':''}">${p.rank}</span></td>
+            <td class="sal-player">${p.name}${flagHtml}</td>
+            <td class="hist-team">${teamFull(p.team||'')}</td>
+            <td class="rat-val">${p.rating}</td>
+            <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
+            <td class="rat-stat">${p.games||''}</td>
+            <td class="rat-stat">${p.pts}</td>
+            <td class="rat-stat">${p.reb}</td>
+            <td class="rat-stat">${p.ast}</td>
+          </tr>`;
+        }).join('');
+      }
     }
     p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
       <div class="sal-table-wrap"><table class="sal-table">

@@ -1327,6 +1327,7 @@ def fetch_draft_classes():
         team = player_bio_team.get(name, "") or _player_team_map.get(name, "")
         if team.lower().startswith("unknown"):
             team = ""
+        team = team_city(team)  # Convert abbreviation to city name
 
         rated_map[name] = {
             "name": name,
@@ -1547,7 +1548,7 @@ def fetch_team_ratings():
 
     # Parse Season block (col 14): PLAYER, RAT, G, PTS, REB, AST
     season_col = 14
-    rated_players = {}  # name → player dict
+    rated_players = {}  # name → player dict (both raw AND normalized keys)
     for ri in range(1, len(reader)):
         row = reader[ri]
         if season_col >= len(row):
@@ -1565,24 +1566,69 @@ def fetch_team_ratings():
         reb = row[season_col + 4].strip() if season_col + 4 < len(row) else ""
         ast = row[season_col + 5].strip() if season_col + 5 < len(row) else ""
 
-        rated_players[name] = {
+        entry = {
             "rating": rat,
             "games": games,
             "pts": pts,
             "reb": reb,
             "ast": ast,
         }
+        rated_players[name] = entry
+        # Also store under normalized name (diacritics stripped) for cross-reference
+        norm = _normalize_name(name)
+        if norm != name:
+            rated_players[norm] = entry
+
+    # Build reverse lookup for fuzzy matching: last_name_lower → {first_initial → entry}
+    _rated_by_last = {}
+    for rname, rentry in rated_players.items():
+        parts = rname.split()
+        if len(parts) >= 2:
+            last = parts[-1].lower()
+            first_init = parts[0][0].upper()
+            if last not in _rated_by_last:
+                _rated_by_last[last] = {}
+            _rated_by_last[last][first_init] = rentry
+
+    def _lookup_rated(player_name):
+        """Multi-strategy lookup against rated_players."""
+        # 1. Exact
+        rp = rated_players.get(player_name)
+        if rp:
+            return rp
+        # 2. Normalized (diacritics)
+        rp = rated_players.get(_normalize_name(player_name))
+        if rp:
+            return rp
+        # 3. Case-insensitive
+        name_lower = ' '.join(player_name.lower().split())
+        for rname, rentry in rated_players.items():
+            if ' '.join(rname.lower().split()) == name_lower:
+                return rentry
+        # 4. Last name + first initial (handles "S. Gilgeous-Alexander" vs "Shai Gilgeous-Alexander")
+        parts = player_name.split()
+        if len(parts) >= 2:
+            last = parts[-1].lower()
+            first_init = parts[0][0].upper()
+            bucket = _rated_by_last.get(last, {})
+            rp = bucket.get(first_init)
+            if rp:
+                return rp
+        return None
 
     # Build team screens using depth chart rosters
     teams = {}
+    unmatched_names = []
     for player_name, team_name in _player_team_map.items():
         if team_name not in teams:
             teams[team_name] = []
-        rp = rated_players.get(player_name)
+        rp = _lookup_rated(player_name)
+        if not rp:
+            unmatched_names.append(player_name)
         teams[team_name].append({
             "rank": 0,  # will be set after sort
             "name": player_name,
-            "rating": f"{rp['rating']:.2f}" if rp else "—",
+            "rating": f"{rp['rating']:.1f}" if rp else "—",
             "ratingNum": rp["rating"] if rp else 0,
             "games": rp["games"] if rp else "",
             "pts": rp["pts"] if rp else "",
@@ -1590,6 +1636,9 @@ def fetch_team_ratings():
             "ast": rp["ast"] if rp else "",
             "country": _PLAYER_COUNTRY.get(player_name, ""),
         })
+
+    if unmatched_names:
+        log.warning(f"  Team ratings: {len(unmatched_names)} players unmatched in ratings sheet: {unmatched_names[:15]}")
 
     # Sort players within each team by rating desc, assign ranks
     team_list = []
@@ -1692,7 +1741,7 @@ def fetch_hist_salaries():
             continue
         if len(row) < 4:
             continue
-        team = row[0].strip()
+        team = team_city(row[0].strip())
         year_str = row[1].strip()
         player = row[2].strip()
         salary_str = row[3].strip()
@@ -1867,7 +1916,7 @@ def _build_leader_screens(api_headers, rows, categories, season, mode_label, min
             players.append({
                 "rank": rank,
                 "name": name,
-                "team": row[team_i],
+                "team": team_city(row[team_i]),
                 "gp": row[gp_i],
                 "value": val,
                 "valueDisplay": disp,
@@ -1917,10 +1966,51 @@ def fetch_counting_stats():
                 if si is not None:
                     d[sk] = row[si]
             _player_full_stats[name] = d
-        log.info(f"  Full stats cache: {len(_player_full_stats)} players")
+        log.info(f"  Full stats cache: {len(_player_full_stats)} players (from leagueleaders)")
+
+        # Supplement with ALL players (catches LeBron, Giddey, etc. who don't qualify for leaders)
+        try:
+            all_url = "https://stats.nba.com/stats/leagueleaders"
+            all_params = {
+                "Season": season,
+                "SeasonType": "Regular Season",
+                "PerMode": "PerGame",
+                "Scope": "",  # empty = ALL players, not just qualified
+                "StatCategory": "PTS",
+                "LeagueID": "00",
+                "ActiveFlag": "",
+            }
+            all_resp = requests.get(all_url, params=all_params, headers=_NBA_STATS_HEADERS, timeout=60)
+            all_resp.raise_for_status()
+            all_data = all_resp.json()
+            all_rs = all_data.get("resultSet", {})
+            all_headers = all_rs.get("headers", [])
+            all_rows = all_rs.get("rowSet", [])
+            all_col = {h: i for i, h in enumerate(all_headers)}
+            all_player_i = all_col.get("PLAYER", 2)
+            all_team_i = all_col.get("TEAM", 4)
+            all_gp_i = all_col.get("GP", 5)
+            supplemented = 0
+            for row in all_rows:
+                name = _normalize_name(row[all_player_i])
+                if name not in _player_full_stats:
+                    d = {"GP": row[all_gp_i], "TEAM": row[all_team_i]}
+                    for sk in stat_keys:
+                        si = all_col.get(sk)
+                        if si is not None:
+                            d[sk] = row[si]
+                    _player_full_stats[name] = d
+                    supplemented += 1
+            log.info(f"  Supplemented {supplemented} players from leagueleaders(Scope=all) (total: {len(_player_full_stats)})")
+        except Exception as e:
+            log.warning(f"  Supplementary stats fetch failed: {e}")
+
         # Diagnostic: check LeBron name variants
         lebron_keys = [k for k in _player_full_stats if 'james' in k.lower() or 'lebron' in k.lower()]
         log.info(f"  LeBron variants in stats: {lebron_keys}")
+        for lk in lebron_keys:
+            d = _player_full_stats[lk]
+            log.info(f"    {lk}: STL={d.get('STL')}, BLK={d.get('BLK')}, FG_PCT={d.get('FG_PCT')}, keys={list(d.keys())}")
 
         for stat_key, title, attempts_key, min_attempts in _PCT_CATS:
             stat_i = col_map_avg.get(stat_key)
@@ -1952,7 +2042,7 @@ def fetch_counting_stats():
                 players.append({
                     "rank": rank,
                     "name": name,
-                    "team": row[team_i],
+                    "team": team_city(row[team_i]),
                     "gp": row[gp_i],
                     "value": val,
                     "valueDisplay": disp,
@@ -2059,7 +2149,7 @@ def fetch_value_rankings():
 
         combined.append({
             "name": name, "team": team, "rating": rating,
-            "ratingDisplay": f"{rating:.2f}",
+            "ratingDisplay": f"{rating:.1f}",
             "salary": salary, "salaryCompact": sal_compact,
             "value": value, "games": gp, "pts": pts,
             "country": country,
@@ -2119,17 +2209,20 @@ comparisons_cache = TTLCache(maxsize=1, ttl=300)  # 5 min
 last_good_comparisons = {"screens": []}
 
 _ALL_STARS = {
-    # 2025 All-Stars
-    "Giannis Antetokounmpo", "Jayson Tatum", "Karl-Anthony Towns", "Donovan Mitchell",
-    "Jalen Brunson", "LaMelo Ball", "Cade Cunningham", "Jaylen Brown",
-    "Tyler Herro", "Evan Mobley", "Scottie Barnes", "Damian Lillard",
-    "Nikola Jokic", "Shai Gilgeous-Alexander", "LeBron James", "Kevin Durant",
-    "Stephen Curry", "Victor Wembanyama", "Anthony Edwards", "James Harden",
-    "De'Aaron Fox", "Alperen Sengun", "Domantas Sabonis", "Norman Powell",
+    # 2025 All-Stars  —  name → position
+    "Giannis Antetokounmpo": "PF", "Jayson Tatum": "SF", "Karl-Anthony Towns": "C",
+    "Donovan Mitchell": "SG", "Jalen Brunson": "PG", "LaMelo Ball": "PG",
+    "Cade Cunningham": "PG", "Jaylen Brown": "SG", "Tyler Herro": "SG",
+    "Evan Mobley": "PF", "Scottie Barnes": "PF", "Damian Lillard": "PG",
+    "Nikola Jokic": "C", "Shai Gilgeous-Alexander": "PG", "LeBron James": "SF",
+    "Kevin Durant": "SF", "Stephen Curry": "PG", "Victor Wembanyama": "C",
+    "Anthony Edwards": "SG", "James Harden": "PG", "De'Aaron Fox": "PG",
+    "Alperen Sengun": "C", "Domantas Sabonis": "C", "Norman Powell": "SG",
     # 2026 All-Stars (add/adjust as selected)
-    "Anthony Davis", "Luka Doncic", "Trae Young", "Tyrese Haliburton",
-    "Paolo Banchero", "Devin Booker", "Bam Adebayo", "Kyrie Irving",
-    "Jaren Jackson Jr.", "Franz Wagner", "Jalen Williams",
+    "Anthony Davis": "PF", "Luka Doncic": "PG", "Trae Young": "PG",
+    "Tyrese Haliburton": "PG", "Paolo Banchero": "PF", "Devin Booker": "SG",
+    "Bam Adebayo": "C", "Kyrie Irving": "PG", "Jaren Jackson Jr.": "PF",
+    "Franz Wagner": "SF", "Jalen Williams": "SG",
 }
 
 _POS_LABELS = {"PG": "Point Guard", "SG": "Shooting Guard", "SF": "Small Forward",
@@ -2211,28 +2304,51 @@ def _find_adv(name):
 def _get_rating(name):
     """Get Season Global Rating for a player from team ratings cache."""
     screens = last_good_team_ratings or []
+    # 1. Exact match
     for scr in screens:
         for p in scr.get("players", []):
             if p["name"] == name and p["ratingNum"]:
                 return p["ratingNum"]
+    # 2. Normalized match (diacritics stripped)
+    norm = _normalize_name(name)
+    for scr in screens:
+        for p in scr.get("players", []):
+            if _normalize_name(p["name"]) == norm and p["ratingNum"]:
+                return p["ratingNum"]
+    # 3. Case-insensitive + whitespace-normalized
+    name_lower = ' '.join(name.lower().split())
+    for scr in screens:
+        for p in scr.get("players", []):
+            if ' '.join(p["name"].lower().split()) == name_lower and p["ratingNum"]:
+                return p["ratingNum"]
+    # 4. Last name + first initial
+    parts = name.split()
+    if len(parts) >= 2:
+        last = parts[-1].lower()
+        first_init = parts[0][0].upper()
+        for scr in screens:
+            for p in scr.get("players", []):
+                kp = p["name"].split()
+                if len(kp) >= 2 and kp[-1].lower() == last and kp[0][0].upper() == first_init and p["ratingNum"]:
+                    return p["ratingNum"]
     return 0
 
 
 def _s(label, va, vb, fmt="1", invert=False):
     """Build one stat row for a comparison card."""
-    va = va or 0
-    vb = vb or 0
+    va = float(va or 0)
+    vb = float(vb or 0)
     if isinstance(va, str):
         try: va = float(va)
-        except: va = 0
+        except: va = 0.0
     if isinstance(vb, str):
         try: vb = float(vb)
-        except: vb = 0
+        except: vb = 0.0
     if invert:
         winner = "A" if va < vb else ("B" if vb < va else "tie")
     else:
         winner = "A" if va > vb else ("B" if vb > va else "tie")
-    return {"label": label, "a": round(va, 1), "b": round(vb, 1), "fmt": fmt, "winner": winner}
+    return {"label": label, "a": round(float(va), 1), "b": round(float(vb), 1), "fmt": fmt, "winner": winner}
 
 
 def _build_comparison(name_a, name_b):
@@ -2245,6 +2361,14 @@ def _build_comparison(name_a, name_b):
     rat_b = _get_rating(name_b)
     team_a = team_city(_player_team_map.get(name_a, ""))
     team_b = team_city(_player_team_map.get(name_b, ""))
+
+    # Diagnostic: log missing data
+    for label, name, stats, adv, rat in [("A", name_a, stats_a, adv_a, rat_a), ("B", name_b, stats_b, adv_b, rat_b)]:
+        missing_counting = [k for k in ["PTS", "STL", "BLK", "FG_PCT", "FG3_PCT", "FT_PCT"] if not stats.get(k)]
+        missing_adv = [k for k in ["PLUS_MINUS", "NET_RATING", "D_FG_PCT", "CLUTCH_GP", "HUSTLE_GP"] if not adv.get(k)]
+        if missing_counting or missing_adv or not rat:
+            log.warning(f"  Comparison {label} ({name}): missing_counting={missing_counting}, missing_adv={missing_adv}, rating={rat}")
+            log.warning(f"    stats_keys={list(stats.keys())[:8]}, adv_keys={list(adv.keys())}, adv_size={len(adv)}")
 
     sections = []
 
@@ -2269,7 +2393,7 @@ def _build_comparison(name_a, name_b):
 
     # ADVANCED
     advanced = []
-    advanced.append(_s("Rating", rat_a, rat_b, "2"))
+    advanced.append(_s("Rating", rat_a, rat_b, "1"))
     advanced.append(_s("Plus/Minus", adv_a.get("PLUS_MINUS"), adv_b.get("PLUS_MINUS"), "s1"))
     advanced.append(_s("Net Rating", adv_a.get("NET_RATING"), adv_b.get("NET_RATING"), "s1"))
     sections.append({"label": "ADVANCED", "stats": advanced})
@@ -2281,10 +2405,10 @@ def _build_comparison(name_a, name_b):
     xfg_a = adv_a.get("NORMAL_FG_PCT") or 0
     xfg_b = adv_b.get("NORMAL_FG_PCT") or 0
     defense.append(_s("Def FG%", dfg_a * 100 if dfg_a else 0, dfg_b * 100 if dfg_b else 0, "1", invert=True))
-    defense.append({"label": "Exp FG%", "a": round(xfg_a * 100, 1) if xfg_a else 0,
-                     "b": round(xfg_b * 100, 1) if xfg_b else 0, "fmt": "1", "winner": "tie"})
-    diff_a = round(((dfg_a or 0) - (xfg_a or 0)) * 100, 1)
-    diff_b = round(((dfg_b or 0) - (xfg_b or 0)) * 100, 1)
+    defense.append({"label": "Exp FG%", "a": round(float(xfg_a * 100 if xfg_a else 0), 1),
+                     "b": round(float(xfg_b * 100 if xfg_b else 0), 1), "fmt": "1", "winner": "tie"})
+    diff_a = round(float(((dfg_a or 0) - (xfg_a or 0)) * 100), 1)
+    diff_b = round(float(((dfg_b or 0) - (xfg_b or 0)) * 100), 1)
     defense.append({"label": "FG +/-", "a": diff_a, "b": diff_b, "fmt": "s1",
                      "winner": "A" if diff_a < diff_b else ("B" if diff_b < diff_a else "tie")})
     sections.append({"label": "DEFENSE", "stats": defense})
@@ -2295,8 +2419,8 @@ def _build_comparison(name_a, name_b):
     cgp_b = adv_b.get("CLUTCH_GP", 1) or 1
     for lbl, key in [("Points", "CLUTCH_PTS"), ("Rebounds", "CLUTCH_REB"),
                       ("Assists", "CLUTCH_AST"), ("Steals", "CLUTCH_STL"), ("Blocks", "CLUTCH_BLK")]:
-        va = round((adv_a.get(key, 0) or 0) / cgp_a, 1)
-        vb = round((adv_b.get(key, 0) or 0) / cgp_b, 1)
+        va = round(float((adv_a.get(key, 0) or 0) / cgp_a), 1)
+        vb = round(float((adv_b.get(key, 0) or 0) / cgp_b), 1)
         clutch.append(_s(lbl, va, vb))
     sections.append({"label": "CLUTCH", "stats": clutch})
 
@@ -2306,9 +2430,9 @@ def _build_comparison(name_a, name_b):
     hgp_b = adv_b.get("HUSTLE_GP", 1) or 1
     for lbl, key in [("Contested", "CONTESTED_SHOTS"), ("Deflections", "DEFLECTIONS"),
                       ("Charges", "CHARGES_DRAWN")]:
-        va = round((adv_a.get(key, 0) or 0) / hgp_a, 2)
-        vb = round((adv_b.get(key, 0) or 0) / hgp_b, 2)
-        fmt = "2" if key == "CHARGES_DRAWN" else "1"
+        va = round(float((adv_a.get(key, 0) or 0) / hgp_a), 1)
+        vb = round(float((adv_b.get(key, 0) or 0) / hgp_b), 1)
+        fmt = "1"  # All hustle stats: 1 decimal
         hustle.append(_s(lbl, va, vb, fmt))
     sections.append({"label": "HUSTLE", "stats": hustle})
 
@@ -2332,8 +2456,8 @@ def _build_comparison(name_a, name_b):
     return {
         "nameA": name_a, "nameB": name_b,
         "teamA": team_a, "teamB": team_b,
-        "posA": _player_position_map.get(name_a, ""),
-        "posB": _player_position_map.get(name_b, ""),
+        "posA": _ALL_STARS.get(name_a) or _player_position_map.get(name_a, ""),
+        "posB": _ALL_STARS.get(name_b) or _player_position_map.get(name_b, ""),
         "countryA": _PLAYER_COUNTRY.get(name_a, ""),
         "countryB": _PLAYER_COUNTRY.get(name_b, ""),
         "gpA": gp_a, "gpB": gp_b,
@@ -2358,7 +2482,7 @@ def fetch_advanced_stats():
 
     _player_adv_stats.clear()
     datasets = [
-        ("advanced", {"PLUS_MINUS": "PLUS_MINUS", "NET_RATING": "NET_RATING"}),
+        ("advanced", {"NET_RATING": "NET_RATING"}),
         ("defense", {"D_FG_PCT": "D_FG_PCT", "NORMAL_FG_PCT": "NORMAL_FG_PCT", "PCT_PLUSMINUS": "PCT_PLUSMINUS"}),
     ]
     # Advanced + Defense
@@ -2384,6 +2508,10 @@ def fetch_advanced_stats():
             _player_adv_stats[name] = {}
         d = _player_adv_stats[name]
         d["CLUTCH_GP"] = row.get("GP") or row.get("G")
+        # PLUS_MINUS lives in clutch data, not advanced
+        pm = row.get("PLUS_MINUS")
+        if pm is not None:
+            d["PLUS_MINUS"] = pm
         for k in ["PTS", "REB", "AST", "STL", "BLK"]:
             d[f"CLUTCH_{k}"] = row.get(k)
 
@@ -2401,58 +2529,28 @@ def fetch_advanced_stats():
         d["CHARGES_DRAWN"] = row.get("CHARGES_DRAWN")
 
     log.info(f"Advanced stats: {len(_player_adv_stats)} players loaded")
+    # Diagnostic: show sample player's full adv data
+    for check_name in ["James Harden", "Anthony Edwards", "LeBron James"]:
+        d = _player_adv_stats.get(check_name, {})
+        log.info(f"  ADV CHECK {check_name}: {len(d)} keys — NET_RATING={d.get('NET_RATING')}, PLUS_MINUS={d.get('PLUS_MINUS')}, D_FG_PCT={d.get('D_FG_PCT')}, CLUTCH_GP={d.get('CLUTCH_GP')}, HUSTLE_GP={d.get('HUSTLE_GP')}")
     lebron_adv = [k for k in _player_adv_stats if 'james' in k.lower() or 'lebron' in k.lower()]
     log.info(f"  LeBron variants in adv stats: {lebron_adv}")
 
 
 def fetch_comparisons():
-    """Build comparison screens: positional rankings, tonight's matchups, All-Star H2H."""
+    """Build comparison screens: All-Star H2H and tonight's matchup previews."""
     global last_good_comparisons
 
     if "comp" in comparisons_cache:
         return comparisons_cache["comp"]
 
-    if not _depth_starters or not _player_full_stats:
-        log.warning("Comparisons: missing depth/stats data, skipping")
+    if not last_good_team_ratings:
+        log.warning("Comparisons: team ratings not loaded yet, skipping")
         return last_good_comparisons
 
     screens = []
 
-    # 1) POSITIONAL POWER RANKINGS — top 20 starters per position
-    for pos in ["PG", "SG", "SF", "PF", "C"]:
-        players_at_pos = []
-        for name, p_pos in _player_position_map.items():
-            if p_pos != pos:
-                continue
-            rat = _get_rating(name)
-            stats = _find_stats(name)
-            if not rat:
-                continue
-            players_at_pos.append({
-                "rank": 0,
-                "name": name,
-                "team": team_city(_player_team_map.get(name, "")),
-                "rating": f"{rat:.2f}",
-                "ratingNum": rat,
-                "games": stats.get("GP", ""),
-                "pts": f"{stats.get('PTS', 0):.1f}" if stats.get("PTS") else "",
-                "reb": f"{stats.get('REB', 0):.1f}" if stats.get("REB") else "",
-                "ast": f"{stats.get('AST', 0):.1f}" if stats.get("AST") else "",
-                "country": _PLAYER_COUNTRY.get(name, ""),
-            })
-        players_at_pos.sort(key=lambda x: x["ratingNum"], reverse=True)
-        top = players_at_pos[:20]
-        for i, p in enumerate(top):
-            p["rank"] = i + 1
-        if top:
-            screens.append({
-                "title": f"{_POS_LABELS[pos]} Rankings — Global Rating",
-                "subtitle": f"Starting {pos}s only | Season rating",
-                "isPositional": True,
-                "players": top,
-            })
-
-    # 2) TONIGHT'S MATCHUPS — best starter vs starter per game
+    # 1) TONIGHT'S MATCHUPS — best starter vs starter per game
     try:
         score_data = fetch_scores()
         games = score_data.get("games", [])
@@ -2507,20 +2605,25 @@ def fetch_comparisons():
                 "comparison": comp,
             })
 
-    # 3) ALL-STAR HEAD-TO-HEAD — random pairs
-    available = [n for n in _ALL_STARS if n in _player_position_map and _get_rating(n)]
+    # 2) ALL-STAR HEAD-TO-HEAD — random pairs using static positions
+    available = [n for n in _ALL_STARS if _get_rating(n)]
+    no_rating = [n for n in _ALL_STARS if not _get_rating(n)]
+    if no_rating:
+        log.warning(f"  All-Stars excluded (no rating): {no_rating}")
+    log.info(f"  All-Stars available for H2H: {len(available)}/{len(_ALL_STARS)}")
+
     random.shuffle(available)
     used = set()
     allstar_pairs = []
     for a in available:
         if a in used:
             continue
-        a_pos = _player_position_map.get(a, "")
+        a_pos = _ALL_STARS[a]
         compat = _POS_COMPAT.get(a_pos, [a_pos])
         for b in available:
             if b == a or b in used:
                 continue
-            b_pos = _player_position_map.get(b, "")
+            b_pos = _ALL_STARS[b]
             if b_pos in compat:
                 allstar_pairs.append((a, b))
                 used.add(a)
@@ -2531,9 +2634,11 @@ def fetch_comparisons():
 
     for a, b in allstar_pairs:
         comp = _build_comparison(a, b)
+        a_pos = _ALL_STARS.get(a, "")
+        b_pos = _ALL_STARS.get(b, "")
         screens.append({
-            "title": "All-Star Head-to-Head",
-            "subtitle": f"{_player_position_map.get(a, '')} vs {_player_position_map.get(b, '')}",
+            "title": f"{a} vs {b}",
+            "subtitle": f"All-Star H2H · {a_pos} vs {b_pos}",
             "isComparison": True,
             "comparison": comp,
         })
@@ -2542,17 +2647,9 @@ def fetch_comparisons():
     comparisons_cache["comp"] = result
     last_good_comparisons = result
 
-    # Diagnostic: log any All-Star with missing stats
-    for name in _ALL_STARS:
-        if name in _player_position_map:
-            s = _find_stats(name)
-            a = _find_adv(name)
-            if not s.get("PTS") and not s.get("STL"):
-                log.warning(f"  Comparison missing stats for {name}")
-
-    log.info(f"Comparisons: {len(screens)} screens ({sum(1 for s in screens if s.get('isPositional'))} positional, "
+    log.info(f"Comparisons: {len(screens)} screens ("
              f"{sum(1 for s in screens if s.get('isPreview'))} preview, "
-             f"{sum(1 for s in screens if 'All-Star' in s.get('title',''))} all-star)")
+             f"{len(allstar_pairs)} all-star H2H)")
     return result
 
 
@@ -2911,12 +3008,16 @@ def fetch_depth():
         for level in t["levels"]:
             for p in level["players"]:
                 _player_team_map[p["name"]] = t["name"]
-        # Populate starters (first level)
+                # Populate position for ALL players (not just starters)
+                # First occurrence wins (starters come first, so their position takes priority)
+                if p["name"] not in _player_position_map:
+                    _player_position_map[p["name"]] = p["pos"]
+        # Populate starters (first level) — used for tonight's matchup logic
         if t["levels"]:
             starters = t["levels"][0]["players"]
             _depth_starters[t["name"]] = [{"name": p["name"], "pos": p["pos"]} for p in starters]
-            for p in starters:
-                _player_position_map[p["name"]] = p["pos"]
+
+    log.info(f"  Position map: {len(_player_position_map)} players (starters: {sum(len(v) for v in _depth_starters.values())})")
 
     # Log all identified teams
     team_names = [t["name"] for t in all_teams]
@@ -3125,7 +3226,15 @@ def _prewarm_caches():
         log.warning(f"Pre-warm salaries failed: {e}")
 
     try:
-        fetch_ratings()
+        fetch_depth()  # Must be before ratings/comparisons — populates _player_team_map
+    except Exception as e:
+        log.warning(f"Pre-warm depth charts failed: {e}")
+
+    # Invalidate ratings cache so it rebuilds with team names from depth charts
+    ratings_cache.clear()
+
+    try:
+        fetch_ratings()  # Needs _player_team_map for team names
     except Exception as e:
         log.warning(f"Pre-warm ratings failed: {e}")
 
@@ -3133,11 +3242,6 @@ def _prewarm_caches():
         fetch_injuries()
     except Exception as e:
         log.warning(f"Pre-warm injuries failed: {e}")
-
-    try:
-        fetch_depth()
-    except Exception as e:
-        log.warning(f"Pre-warm depth charts failed: {e}")
 
     try:
         fetch_team_ratings()

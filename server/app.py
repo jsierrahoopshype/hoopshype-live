@@ -50,172 +50,15 @@ last_good_salaries = {"rankings": [], "teams": {}, "count": 0}
 
 # Cross-reference lookups (populated by fetch_salaries / fetch_depth)
 _player_salary_map = {}   # "LeBron James" → "$46.7M"
-_player_salary_raw = {}   # "LeBron James" → 46700000 (int)
-
-# Universal team → city name mapping
-_TEAM_TO_CITY = {
-    # 3-letter abbreviations
-    "ATL": "Atlanta", "BOS": "Boston", "BKN": "Brooklyn", "BRK": "Brooklyn",
-    "CHA": "Charlotte", "CHI": "Chicago", "CLE": "Cleveland",
-    "DAL": "Dallas", "DEN": "Denver", "DET": "Detroit",
-    "GSW": "Golden State", "GS": "Golden State",
-    "HOU": "Houston", "IND": "Indiana",
-    "LAC": "LA Clippers", "LAL": "LA Lakers",
-    "MEM": "Memphis", "MIA": "Miami", "MIL": "Milwaukee", "MIN": "Minnesota",
-    "NOP": "New Orleans", "NO": "New Orleans",
-    "NYK": "New York", "NY": "New York",
-    "OKC": "Oklahoma City",
-    "ORL": "Orlando", "PHI": "Philadelphia", "PHX": "Phoenix", "PHO": "Phoenix",
-    "POR": "Portland", "SAC": "Sacramento", "SAS": "San Antonio", "SA": "San Antonio",
-    "TOR": "Toronto", "UTA": "Utah", "WAS": "Washington",
-    # Full team names
-    "Atlanta Hawks": "Atlanta", "Boston Celtics": "Boston",
-    "Brooklyn Nets": "Brooklyn", "Charlotte Hornets": "Charlotte",
-    "Chicago Bulls": "Chicago", "Cleveland Cavaliers": "Cleveland",
-    "Dallas Mavericks": "Dallas", "Denver Nuggets": "Denver",
-    "Detroit Pistons": "Detroit", "Golden State Warriors": "Golden State",
-    "Houston Rockets": "Houston", "Indiana Pacers": "Indiana",
-    "LA Clippers": "LA Clippers", "Los Angeles Clippers": "LA Clippers",
-    "LA Lakers": "LA Lakers", "Los Angeles Lakers": "LA Lakers",
-    "Memphis Grizzlies": "Memphis", "Miami Heat": "Miami",
-    "Milwaukee Bucks": "Milwaukee", "Minnesota Timberwolves": "Minnesota",
-    "New Orleans Pelicans": "New Orleans", "New York Knicks": "New York",
-    "Oklahoma City Thunder": "Oklahoma City",
-    "Orlando Magic": "Orlando", "Philadelphia 76ers": "Philadelphia",
-    "Phoenix Suns": "Phoenix", "Portland Trail Blazers": "Portland",
-    "Sacramento Kings": "Sacramento", "San Antonio Spurs": "San Antonio",
-    "Toronto Raptors": "Toronto", "Utah Jazz": "Utah",
-    "Washington Wizards": "Washington",
-}
-
-def team_city(raw):
-    """Convert any team format (abbreviation, full name) to city name."""
-    if not raw:
-        return ""
-    c = _TEAM_TO_CITY.get(raw.strip())
-    if c:
-        return c
-    c = _TEAM_TO_CITY.get(raw.strip().upper())
-    if c:
-        return c
-    return raw.strip()
+_player_salary_raw = {}   # "LeBron James" → 46700000 (integer)
 _full_name_map = {}       # "L. James" → "LeBron James", etc.
 _player_team_map = {}     # "LeBron James" → "Los Angeles Lakers" (from depth charts)
+_player_position_map = {} # "LeBron James" → "PG" (starters only, from depth charts)
+_depth_starters = {}      # "Boston" → [{"name": "...", "pos": "PG"}, ...]
+_player_full_stats = {}   # "LeBron James" → {"PTS": 25.1, "REB": 7.2, ...} (from NBA leagueleaders)
+_player_adv_stats = {}    # "LeBron James" → {"NET_RATING": 5.2, ...} (from GitHub JSON)
 _salary_team_lookup = {}  # "LeBron James" → "Los Angeles Lakers" (from salary data, for depth ID)
 _last_name_map = {}       # "Mathurin" → [("Bennedict Mathurin", "Bennedict"), ...]
-_player_position_map = {} # "LeBron James" → "SF" (from depth charts, starters only)
-_depth_starters = {}      # "Atlanta Hawks" → [{"pos": "PG", "name": "Trae Young"}, ...]
-_player_stats_cache = {}  # "LeBron James" → {"rating": 20.55, "ratingDisplay": "20.55", "games": "81", ...}
-_player_full_stats = {}   # "LeBron James" → {"PTS": 25.7, ...}
-_player_adv_stats = {}    # "LeBron James" → {"PLUS_MINUS": 5.2, "NET_RATING": 8.1, ...}
-
-# GitHub JSON for advanced/defense/clutch/hustle stats
-_GITHUB_JSON_URL = "https://raw.githubusercontent.com/jsierrahoopshype/nba-player-data/main/nba-2025-26-data.json"
-adv_stats_cache = TTLCache(maxsize=1, ttl=3600)  # 1 hour
-
-
-def fetch_advanced_stats():
-    """Fetch advanced, defense, clutch, hustle stats from GitHub JSON."""
-    if "adv" in adv_stats_cache:
-        return
-    try:
-        resp = requests.get(_GITHUB_JSON_URL, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        _player_adv_stats.clear()
-
-        def _index(rows, name_col="PLAYER_NAME"):
-            result = {}
-            for row in rows:
-                name = row.get(name_col, row.get("PLAYER", ""))
-                if name:
-                    result[_normalize_name(name)] = row
-            return result
-
-        adv = _index(data.get("advanced", []))
-        defense = _index(data.get("defense", []))
-        clutch = _index(data.get("clutch", []))
-        hustle = _index(data.get("hustle", []))
-
-        # Log actual column names from each dataset for debugging
-        for lbl, dataset in [("advanced", adv), ("defense", defense), ("clutch", clutch), ("hustle", hustle)]:
-            if dataset:
-                sample_name = next(iter(dataset))
-                sample_keys = sorted(dataset[sample_name].keys())
-                log.info(f"  {lbl}: {len(dataset)} players, cols: {sample_keys[:20]}")
-                if lbl == "defense":
-                    log.info(f"  defense ALL cols: {sample_keys}")
-
-        all_names = set(adv) | set(defense) | set(clutch) | set(hustle)
-        for name in all_names:
-            d = {}
-            if name in adv:
-                a = adv[name]
-                for k in ["PLUS_MINUS", "NET_RATING"]:
-                    if k in a and a[k] is not None:
-                        d[k] = a[k]
-            if name in defense:
-                df = defense[name]
-                # Try all possible column variants
-                for k in list(df.keys()):
-                    kup = k.upper()
-                    if "D_FG" in kup or "DEF_FG" in kup:
-                        d["D_FG_PCT"] = df[k]
-                    elif "NORMAL" in kup or "EXPECTED" in kup:
-                        d["NORMAL_FG_PCT"] = df[k]
-                    elif "PLUSMINUS" in kup or "PLUS_MINUS" in kup:
-                        if "PCT" in kup or "FG" in kup:
-                            d["PCT_PLUSMINUS"] = df[k]
-            if name in clutch:
-                c = clutch[name]
-                for k in ["PTS", "REB", "AST", "STL", "BLK"]:
-                    ck = f"CLUTCH_{k}"
-                    if k in c and c[k] is not None:
-                        d[ck] = c[k]
-                # Store clutch GP for averaging
-                cgp = c.get("GP") or c.get("G")
-                if cgp:
-                    d["CLUTCH_GP"] = cgp
-            if name in hustle:
-                h = hustle[name]
-                for k in ["CONTESTED_SHOTS", "DEFLECTIONS", "CHARGES_DRAWN"]:
-                    if k in h and h[k] is not None:
-                        d[k] = h[k]
-                # Store hustle GP for averaging
-                hgp = h.get("GP") or h.get("G")
-                if hgp:
-                    d["HUSTLE_GP"] = hgp
-            if d:
-                _player_adv_stats[name] = d
-
-        adv_stats_cache["adv"] = True
-        log.info(f"Advanced stats loaded: {len(_player_adv_stats)} players "
-                 f"(adv={len(adv)}, def={len(defense)}, clutch={len(clutch)}, hustle={len(hustle)})")
-
-        # Log sample player data for debugging
-        for test_name in ["LeBron James", "Jalen Brunson"]:
-            if test_name in _player_adv_stats:
-                log.info(f"  Sample [{test_name}]: {_player_adv_stats[test_name]}")
-    except Exception as e:
-        log.warning(f"Advanced stats fetch failed: {e}")
-        adv_stats_cache["adv"] = True
-
-# 2025 + 2026 All-Star rosters (combined, unique names)
-_ALL_STARS = {
-    # 2026 East
-    "Giannis Antetokounmpo", "Jaylen Brown", "Jalen Brunson", "Cade Cunningham", "Tyrese Maxey",
-    "Scottie Barnes", "Jalen Duren", "Jalen Johnson", "Donovan Mitchell", "Norman Powell",
-    "Pascal Siakam", "Karl-Anthony Towns",
-    # 2026 West
-    "Stephen Curry", "Luka Doncic", "Shai Gilgeous-Alexander", "Nikola Jokic", "Victor Wembanyama",
-    "Devin Booker", "Anthony Edwards", "Chet Holmgren", "Kevin Durant", "LeBron James", "Jamal Murray",
-    # 2026 additions/replacements
-    "Kawhi Leonard", "Alperen Sengun", "Brandon Ingram", "De'Aaron Fox",
-    # 2025-only (not repeated from above)
-    "Jayson Tatum", "Damian Lillard", "Darius Garland", "Tyler Herro", "Evan Mobley",
-    "Anthony Davis", "James Harden", "Jaren Jackson Jr.", "Jalen Williams",
-}
-_POS_LABELS = {"PG": "Point Guard", "SG": "Shooting Guard", "SF": "Small Forward", "PF": "Power Forward", "C": "Center"}
 
 
 def resolve_player_name(raw_name):
@@ -258,6 +101,38 @@ def resolve_player_name(raw_name):
 # and we call from 20+ concurrent ThreadPoolExecutor workers)
 _HTTP_HEADERS = {"User-Agent": "HoopsHypeLive/1.0"}
 
+# Team abbreviation → city name mapping
+_TEAM_TO_CITY = {
+    "ATL": "Atlanta", "BOS": "Boston", "BKN": "Brooklyn", "CHA": "Charlotte",
+    "CHI": "Chicago", "CLE": "Cleveland", "DAL": "Dallas", "DEN": "Denver",
+    "DET": "Detroit", "GSW": "Golden State", "HOU": "Houston", "IND": "Indiana",
+    "LAC": "LA Clippers", "LAL": "LA Lakers", "MEM": "Memphis", "MIA": "Miami",
+    "MIL": "Milwaukee", "MIN": "Minnesota", "NOP": "New Orleans", "NYK": "New York",
+    "OKC": "Oklahoma City", "ORL": "Orlando", "PHI": "Philadelphia", "PHX": "Phoenix",
+    "POR": "Portland", "SAC": "Sacramento", "SAS": "San Antonio", "TOR": "Toronto",
+    "UTA": "Utah", "WAS": "Washington",
+    # Full names → city names
+    "Atlanta Hawks": "Atlanta", "Boston Celtics": "Boston", "Brooklyn Nets": "Brooklyn",
+    "Charlotte Hornets": "Charlotte", "Chicago Bulls": "Chicago", "Cleveland Cavaliers": "Cleveland",
+    "Dallas Mavericks": "Dallas", "Denver Nuggets": "Denver", "Detroit Pistons": "Detroit",
+    "Golden State Warriors": "Golden State", "Houston Rockets": "Houston", "Indiana Pacers": "Indiana",
+    "LA Clippers": "LA Clippers", "Los Angeles Clippers": "LA Clippers",
+    "LA Lakers": "LA Lakers", "Los Angeles Lakers": "LA Lakers",
+    "Memphis Grizzlies": "Memphis", "Miami Heat": "Miami", "Milwaukee Bucks": "Milwaukee",
+    "Minnesota Timberwolves": "Minnesota", "New Orleans Pelicans": "New Orleans",
+    "New York Knicks": "New York", "Oklahoma City Thunder": "Oklahoma City",
+    "Orlando Magic": "Orlando", "Philadelphia 76ers": "Philadelphia",
+    "Phoenix Suns": "Phoenix", "Portland Trail Blazers": "Portland",
+    "Sacramento Kings": "Sacramento", "San Antonio Spurs": "San Antonio",
+    "Toronto Raptors": "Toronto", "Utah Jazz": "Utah", "Washington Wizards": "Washington",
+}
+
+def team_city(raw):
+    """Convert team abbreviation or full name to city name."""
+    if not raw:
+        return ""
+    return _TEAM_TO_CITY.get(raw) or _TEAM_TO_CITY.get(raw.upper()) or raw
+
 
 # ═══════════════════════════════════════
 # BLUESKY FEED
@@ -298,48 +173,6 @@ def _fetch_one_feed(handle):
 
             created = record.get("createdAt", "")
 
-            # Extract embedded images
-            images = []
-            embed = post.get("embed", {})
-            embed_type = embed.get("$type", "")
-            if embed_type == "app.bsky.embed.images#view":
-                for img in embed.get("images", [])[:2]:  # max 2 images
-                    thumb = img.get("thumb", "")
-                    if thumb:
-                        images.append(thumb)
-            elif embed_type == "app.bsky.embed.recordWithMedia#view":
-                media = embed.get("media", {})
-                if media.get("$type") == "app.bsky.embed.images#view":
-                    for img in media.get("images", [])[:2]:
-                        thumb = img.get("thumb", "")
-                        if thumb:
-                            images.append(thumb)
-
-            # Extract quote post
-            quote = None
-            if embed_type == "app.bsky.embed.record#view":
-                rec = embed.get("record", {})
-                if rec.get("$type") == "app.bsky.embed.record#viewRecord":
-                    q_author = rec.get("author", {})
-                    q_text = rec.get("value", {}).get("text", "")
-                    if q_text:
-                        quote = {
-                            "author": q_author.get("displayName", ""),
-                            "handle": f"@{q_author.get('handle', '')}",
-                            "text": q_text[:200] + ("..." if len(q_text) > 200 else ""),
-                        }
-            elif embed_type == "app.bsky.embed.recordWithMedia#view":
-                rec = embed.get("record", {}).get("record", {})
-                if rec.get("$type") == "app.bsky.embed.record#viewRecord":
-                    q_author = rec.get("author", {})
-                    q_text = rec.get("value", {}).get("text", "")
-                    if q_text:
-                        quote = {
-                            "author": q_author.get("displayName", ""),
-                            "handle": f"@{q_author.get('handle', '')}",
-                            "text": q_text[:200] + ("..." if len(q_text) > 200 else ""),
-                        }
-
             post_data = {
                 "author": author.get("displayName", handle),
                 "handle": f"@{author.get('handle', handle)}",
@@ -349,10 +182,35 @@ def _fetch_one_feed(handle):
                 "time": _time_ago(created),
                 "timestamp": created,
             }
+
+            # Extract embedded images
+            embed = post.get("embed", {})
+            embed_type = embed.get("$type", "")
+            images = []
+            if "images" in embed_type or "recordWithMedia" in embed_type:
+                img_list = embed.get("images", [])
+                if not img_list and "media" in embed:
+                    img_list = embed["media"].get("images", [])
+                for img in img_list[:2]:
+                    thumb = img.get("thumb", "")
+                    if thumb:
+                        images.append(thumb)
             if images:
                 post_data["images"] = images
-            if quote:
-                post_data["quote"] = quote
+
+            # Extract quote posts
+            if "record" in embed_type:
+                rec = embed.get("record", {})
+                if "record" in rec:
+                    rec = rec["record"]
+                q_author = rec.get("author", {})
+                q_text = rec.get("value", {}).get("text", "") or rec.get("text", "")
+                if q_text:
+                    post_data["quote"] = {
+                        "author": q_author.get("displayName", ""),
+                        "handle": q_author.get("handle", ""),
+                        "text": q_text[:200],
+                    }
 
             posts.append(post_data)
 
@@ -454,8 +312,7 @@ def fetch_headlines():
     """Fetch headlines from a public Google Sheet (CSV export).
 
     The sheet is the single source of truth for ticker headlines.
-    Column A has timestamps, Column B has headline text.
-    Only headlines from the last 18 hours are shown.
+    Column B contains headline text; first N rows get a NEW badge.
     """
     global last_good_headlines
 
@@ -476,60 +333,46 @@ def fetch_headlines():
         log.warning(f"Google Sheets headlines fetch failed: {e}")
         return last_good_headlines
 
-    # Parse CSV — column A (index 0) = timestamp, column B (index 1) = text
+    # Parse CSV — column A (index 0) is timestamp, column B (index 1) is headline text
     col_index = ord(config.HEADLINES_COLUMN.upper()) - ord("A")
     reader = csv.reader(io.StringIO(resp.text))
     items = []
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=18)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=18)
     skipped_old = 0
 
     for row_num, row in enumerate(reader):
         if len(row) <= col_index:
             continue
         text = row[col_index].strip()
+        # Clean encoding artifacts (Â, non-breaking spaces, etc.)
         text = text.replace('\u00a0', ' ').replace('\u00c2', '').replace('\xc2', '')
-        text = ' '.join(text.split())
+        text = ' '.join(text.split())  # collapse multiple spaces
         if not text:
             continue
+        # Skip header row (first row if it looks like a label)
         if row_num == 0 and text.lower() in ("headline", "headlines", "text", "title", "rumor", "rumors"):
             continue
 
-        # Try to parse timestamp from column A (or column before text)
-        ts_col = 0 if col_index > 0 else None
-        ts = None
+        # Parse timestamp from column A for 18-hour filter
         time_display = ""
-        if ts_col is not None and len(row) > ts_col:
-            raw_ts = row[ts_col].strip()
-            if raw_ts:
-                # Try multiple date formats
-                for fmt in [
-                    "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%m/%d/%Y",
-                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
-                    "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
-                    "%b %d, %Y %H:%M", "%b %d, %Y",
-                ]:
-                    try:
-                        ts = datetime.strptime(raw_ts, fmt)
-                        # Assume ET if no timezone
-                        ts = ts.replace(tzinfo=timezone.utc)
-                        break
-                    except ValueError:
-                        continue
-
-        # Filter: skip headlines older than 18 hours
-        if ts:
-            if ts < cutoff:
-                skipped_old += 1
-                continue
-            # Build relative time display
-            diff = now - ts
-            mins = int(diff.total_seconds() / 60)
-            if mins < 60:
-                time_display = f"{mins}m"
-            else:
-                hrs = mins // 60
-                time_display = f"{hrs}h"
+        if len(row) > 0 and row[0].strip():
+            ts_str = row[0].strip()
+            parsed_ts = None
+            for fmt in ["%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%m/%d/%Y",
+                        "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
+                        "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+                        "%b %d, %Y %H:%M", "%b %d, %Y"]:
+                try:
+                    parsed_ts = datetime.strptime(ts_str, fmt).replace(tzinfo=timezone.utc)
+                    break
+                except:
+                    continue
+            if parsed_ts:
+                if parsed_ts < cutoff:
+                    skipped_old += 1
+                    continue
+                diff_mins = (datetime.now(timezone.utc) - parsed_ts).total_seconds() / 60
+                time_display = f"{int(diff_mins)}m" if diff_mins < 60 else f"{int(diff_mins // 60)}h"
 
         items.append({
             "text": text,
@@ -544,10 +387,9 @@ def fetch_headlines():
         last_good_headlines = items
         headlines_cache["headlines"] = items
         new_count = sum(1 for h in items if h["isNew"])
-        log.info(f"Cached {len(items)} headlines from Google Sheet "
-                 f"({new_count} NEW, {skipped_old} skipped as older than 18h)")
+        log.info(f"Cached {len(items)} headlines from Google Sheet ({new_count} NEW, {skipped_old} skipped as older than 18h)")
     else:
-        log.warning("Google Sheet returned no usable headlines (all may be older than 18h)")
+        log.warning("Google Sheet returned no usable headlines")
 
     return last_good_headlines
 
@@ -1226,14 +1068,14 @@ def fetch_salaries():
 
     result = {
         "rankings": [{
-            "rank": t["rank"], "team": team_city(t["team"]),
+            "rank": t["rank"], "team": t["team"],
             "totalDisplay": t["totalDisplay"],
             "totalNextDisplay": t["totalNextDisplay"],
             "capSpace": t["capSpace"], "teamStatus": t["teamStatus"],
             "playerCount": t["playerCount"],
         } for t in teams_list],
-        "teams": {team_city(t["team"]): {
-            "team": team_city(t["team"]), "rank": t["rank"],
+        "teams": {t["team"]: {
+            "team": t["team"], "rank": t["rank"],
             "totalDisplay": t["totalDisplay"],
             "totalNextDisplay": t["totalNextDisplay"],
             "capSpace": t["capSpace"], "teamStatus": t["teamStatus"],
@@ -1320,7 +1162,7 @@ def fetch_ratings():
 
             rat = row[start_col + 1].strip() if start_col + 1 < len(row) else ""
             country = _PLAYER_COUNTRY.get(name, "")
-            team = team_city(_player_team_map.get(name, "") or _salary_team_lookup.get(name, ""))
+            team = _player_team_map.get(name, "")
             if team.lower().startswith("unknown"):
                 team = ""
 
@@ -1458,53 +1300,48 @@ def fetch_draft_classes():
 
     reader = list(csv.reader(io.StringIO(resp.text)))
 
-    # Read rated players from ALL rating blocks to maximize coverage
-    # Each block: PLAYER at offset +0, RAT at +1, then stats vary
-    # Standard blocks: +2=G, +3=PTS, +4=REB, +5=AST
-    _ALL_PLAYER_COLS = [3, 14, 25, 36, 47, 58, 80]  # skip 91 (Most In Form has different layout)
-    rated_map = {}  # name → player dict (keep highest rating)
+    # Read rated players from Season block ONLY (col 14) for consistency
+    # with Team Ratings and main Global Rating screens
+    _SEASON_COL = 14  # Season block: PLAYER(+0), RAT(+1), G(+2), PTS(+3), REB(+4), AST(+5)
+    rated_map = {}  # name → player dict
 
-    for start_col in _ALL_PLAYER_COLS:
-        for row_idx in range(1, len(reader)):
-            row = reader[row_idx]
-            if start_col >= len(row):
-                continue
-            name = row[start_col].strip() if start_col < len(row) else ""
-            rat_str = row[start_col + 1].strip() if start_col + 1 < len(row) else ""
-            if not name or not rat_str:
-                continue
-            try:
-                rat = float(rat_str)
-            except ValueError:
-                continue
+    for row_idx in range(1, len(reader)):
+        row = reader[row_idx]
+        if _SEASON_COL >= len(row):
+            continue
+        name = row[_SEASON_COL].strip() if _SEASON_COL < len(row) else ""
+        rat_str = row[_SEASON_COL + 1].strip() if _SEASON_COL + 1 < len(row) else ""
+        if not name or not rat_str:
+            continue
+        try:
+            rat = float(rat_str)
+        except ValueError:
+            continue
 
-            games = row[start_col + 2].strip() if start_col + 2 < len(row) else ""
-            pts = row[start_col + 3].strip() if start_col + 3 < len(row) else ""
-            reb = row[start_col + 4].strip() if start_col + 4 < len(row) else ""
-            ast = row[start_col + 5].strip() if start_col + 5 < len(row) else ""
+        games = row[_SEASON_COL + 2].strip() if _SEASON_COL + 2 < len(row) else ""
+        pts = row[_SEASON_COL + 3].strip() if _SEASON_COL + 3 < len(row) else ""
+        reb = row[_SEASON_COL + 4].strip() if _SEASON_COL + 4 < len(row) else ""
+        ast = row[_SEASON_COL + 5].strip() if _SEASON_COL + 5 < len(row) else ""
 
-            # Use bio sheet team, fallback to depth chart, fallback to salary data
-            team = team_city(player_bio_team.get(name, "") or _player_team_map.get(name, "") or _salary_team_lookup.get(name, ""))
-            # Clean up — never show "Unknown"
-            if team.lower().startswith("unknown"):
-                team = ""
+        # Use bio sheet team (3-letter abbreviation), fallback to depth chart team
+        team = player_bio_team.get(name, "") or _player_team_map.get(name, "")
+        if team.lower().startswith("unknown"):
+            team = ""
 
-            # Keep the entry with the highest rating
-            if name not in rated_map or rat > rated_map[name]["rating"]:
-                rated_map[name] = {
-                    "name": name,
-                    "rating": rat,
-                    "ratingDisplay": rat_str,
-                    "games": games,
-                    "pts": pts,
-                    "reb": reb,
-                    "ast": ast,
-                    "team": team,
-                    "country": _PLAYER_COUNTRY.get(name, ""),
-                }
+        rated_map[name] = {
+            "name": name,
+            "rating": rat,
+            "ratingDisplay": rat_str,
+            "games": games,
+            "pts": pts,
+            "reb": reb,
+            "ast": ast,
+            "team": team,
+            "country": _PLAYER_COUNTRY.get(name, ""),
+        }
 
     rated_players = list(rated_map.values())
-    log.info(f"  Ratings: {len(rated_players)} unique rated players from {len(_ALL_PLAYER_COLS)} blocks")
+    log.info(f"  Ratings: {len(rated_players)} unique rated players from Season block")
 
     # 3) Group by draft class — use case-insensitive matching for bio lookup
     by_class = {}
@@ -1525,7 +1362,7 @@ def fetch_draft_classes():
 
     log.info(f"  Matched: {sum(len(v) for v in by_class.values())}, unmatched: {unmatched}")
 
-    # 4) Build screens — one per class, no lumping
+    # 4) Build screens — every class gets its own screen
     screens = []
 
     for year in sorted(by_class.keys(), reverse=True):
@@ -1629,8 +1466,8 @@ def fetch_transactions():
         if salary in ("#N/A", "N/A", "#REF!", ""):
             salary = ""
 
-        # Map abbreviation to city name
-        team_full = team_city(team)
+        # Map abbreviation to full team name
+        team_full = _TX_TEAM_NAMES.get(team.upper(), team)
 
         country = _PLAYER_COUNTRY.get(player, "")
 
@@ -1667,1012 +1504,6 @@ def fetch_transactions():
 def api_transactions():
     """Return transaction screens."""
     data = fetch_transactions()
-    return jsonify({"screens": data, "count": len(data)})
-
-
-# ═══════════════════════════════════════
-# SALARY vs RATING (Value Rankings)
-# ═══════════════════════════════════════
-
-value_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min
-last_good_value = []
-
-
-def fetch_value_rankings():
-    """Cross-reference salary and rating data to find best/worst value players."""
-    global last_good_value
-
-    if "val" in value_cache:
-        return value_cache["val"]
-
-    # Need both salary and ratings data loaded
-    if not _player_salary_raw or not _player_team_map:
-        log.info("Value rankings: waiting for salary/depth data to load first")
-        return last_good_value
-
-    # Fetch ratings from Season block (col 14)
-    csv_url = (
-        f"https://docs.google.com/spreadsheets/d/{_RATINGS_SHEET_ID}"
-        f"/export?format=csv&gid={_RATINGS_GID}"
-    )
-    try:
-        resp = requests.get(csv_url, timeout=30)
-        resp.raise_for_status()
-        resp.encoding = 'utf-8'
-    except Exception as e:
-        log.warning(f"Value rankings fetch failed: {e}")
-        return last_good_value
-
-    reader = list(csv.reader(io.StringIO(resp.text)))
-
-    # Read Season block (col 14) for current season ratings
-    player_ratings = {}
-    for row in reader[1:]:
-        if len(row) < 20:
-            continue
-        name = row[14].strip() if len(row) > 14 else ""
-        rat_str = row[15].strip() if len(row) > 15 else ""
-        if not name or not rat_str:
-            continue
-        try:
-            rat = float(rat_str)
-        except ValueError:
-            continue
-        games = row[16].strip() if len(row) > 16 else ""
-        pts = row[17].strip() if len(row) > 17 else ""
-        reb = row[18].strip() if len(row) > 18 else ""
-        ast_val = row[19].strip() if len(row) > 19 else ""
-        player_ratings[name] = {
-            "rating": rat, "ratingDisplay": rat_str,
-            "games": games, "pts": pts, "reb": reb, "ast": ast_val,
-        }
-
-    log.info(f"Value rankings: {len(player_ratings)} rated, {len(_player_salary_raw)} with salary")
-
-    # Populate global stats cache for comparisons
-    _player_stats_cache.clear()
-    _player_stats_cache.update(player_ratings)
-
-    # Cross-reference: need both rating and salary
-    MIN_SALARY = 500_000  # skip two-way / 10-day to avoid misleading "value"
-    MIN_GAMES = 10
-    combined = []
-    for name, rat_data in player_ratings.items():
-        salary = _player_salary_raw.get(name, 0)
-        if salary < MIN_SALARY:
-            continue
-        games = 0
-        try:
-            games = int(rat_data["games"])
-        except (ValueError, TypeError):
-            pass
-        if games < MIN_GAMES:
-            continue
-
-        # Value = rating points per $1M salary
-        salary_m = salary / 1_000_000
-        value = rat_data["rating"] / salary_m if salary_m > 0 else 0
-
-        team = team_city(_salary_team_lookup.get(name, ""))
-        country = _PLAYER_COUNTRY.get(name, "")
-        sal_display = _player_salary_map.get(name, "")
-        # Compact display: "$46.4M" or "$636K"
-        if salary_m >= 1:
-            sal_compact = f"${salary_m:.1f}M"
-        else:
-            sal_compact = f"${salary//1000}K"
-
-        combined.append({
-            "name": name,
-            "team": team,
-            "rating": rat_data["rating"],
-            "ratingDisplay": rat_data["ratingDisplay"],
-            "salary": salary,
-            "salaryDisplay": sal_display,
-            "salaryCompact": sal_compact,
-            "salaryM": round(salary_m, 1),
-            "value": round(value, 2),
-            "games": rat_data["games"],
-            "pts": rat_data["pts"],
-            "reb": rat_data["reb"],
-            "ast": rat_data["ast"],
-            "country": country,
-        })
-
-    log.info(f"  Combined: {len(combined)} players with both rating + salary (min ${MIN_SALARY:,}, min {MIN_GAMES} GP)")
-
-    screens = []
-
-    # Screen 1: Best Value (highest rating per $M)
-    best = [dict(p) for p in sorted(combined, key=lambda p: p["value"], reverse=True)[:20]]
-    for i, p in enumerate(best):
-        p["rank"] = i + 1
-    if best:
-        screens.append({
-            "title": "Best Value — Rating per $1M Salary",
-            "subtitle": f"Min {MIN_GAMES} GP, min ${MIN_SALARY//1000}K salary | {len(combined)} players",
-            "players": best,
-            "isBestValue": True,
-        })
-
-    # Screen 2: Worst Value (lowest rating per $M, among players earning $10M+)
-    expensive = [p for p in combined if p["salary"] >= 10_000_000]
-    worst = [dict(p) for p in sorted(expensive, key=lambda p: p["value"])[:20]]
-    for i, p in enumerate(worst):
-        p["rank"] = i + 1
-    if worst:
-        screens.append({
-            "title": "Worst Value — Rating per $1M Salary",
-            "subtitle": f"Players earning $10M+ | {len(expensive)} players",
-            "players": worst,
-            "isBestValue": False,
-        })
-
-    # Screen 3: Most Overpaid (highest salary, lowest rating)
-    overpaid = [dict(p) for p in sorted(expensive, key=lambda p: p["rating"])[:20]]
-    for i, p in enumerate(overpaid):
-        p["rank"] = i + 1
-    if overpaid:
-        screens.append({
-            "title": "Lowest Rated $10M+ Players",
-            "subtitle": f"Lowest Global Rating among players earning $10M+ | {len(expensive)} players",
-            "players": overpaid,
-            "isBestValue": False,
-        })
-
-    # Screen 4: Best bargains (highest rating, under $10M)
-    bargains = [p for p in combined if p["salary"] < 10_000_000]
-    bargains_top = [dict(p) for p in sorted(bargains, key=lambda p: p["rating"], reverse=True)[:20]]
-    for i, p in enumerate(bargains_top):
-        p["rank"] = i + 1
-    if bargains_top:
-        screens.append({
-            "title": "Best Bargains — Under $10M",
-            "subtitle": f"Highest Global Rating among players earning under $10M | {len(bargains)} players",
-            "players": bargains_top,
-            "isBestValue": True,
-        })
-
-    if screens:
-        value_cache["val"] = screens
-        last_good_value = screens
-        log.info(f"Cached {len(screens)} value ranking screens")
-
-    return screens
-
-
-@app.route("/api/value")
-def api_value():
-    """Return salary vs rating value screens."""
-    data = fetch_value_rankings()
-    return jsonify({"screens": data, "count": len(data)})
-
-
-# ═══════════════════════════════════════
-# PLAYER COMPARISONS (Matchups / Positional / All-Star H2H)
-# ═══════════════════════════════════════
-
-comparisons_cache = TTLCache(maxsize=1, ttl=300)  # 5 min (short — games change)
-last_good_comparisons = []
-
-
-def _positions_similar(a, b):
-    """Check if two positions are similar enough for comparison."""
-    if a == b:
-        return True
-    guards = {"PG", "SG"}
-    bigs = {"PF", "C"}
-    return (a in guards and b in guards) or (a in bigs and b in bigs)
-
-
-def _find_depth_team(abbr):
-    """Find depth chart full team name from abbreviation."""
-    city = team_city(abbr)
-    if not city:
-        return None
-    for team_name in _depth_starters:
-        # Match by city name within the full team name
-        tc = team_city(team_name)
-        if tc == city:
-            return team_name
-    return None
-
-
-def _find_full_stats(name):
-    """Find player in _player_full_stats with multiple fallbacks."""
-    if name in _player_full_stats:
-        return _player_full_stats[name]
-    norm = _normalize_name(name)
-    if norm in _player_full_stats:
-        return _player_full_stats[norm]
-    # Case-insensitive + whitespace-normalized scan
-    key = norm.lower().strip()
-    for k, v in _player_full_stats.items():
-        if _normalize_name(k).lower().strip() == key:
-            return v
-    # Last name match (for "LeBron James" vs "L. James" style mismatches)
-    parts = name.strip().split()
-    if len(parts) >= 2:
-        last = parts[-1].lower()
-        first_init = parts[0][0].lower() if parts[0] else ""
-        candidates = []
-        for k, v in _player_full_stats.items():
-            kp = k.strip().split()
-            if len(kp) >= 2 and kp[-1].lower() == last and kp[0][0].lower() == first_init:
-                candidates.append(v)
-        if len(candidates) == 1:
-            return candidates[0]
-    return {}
-
-
-def _find_adv_stats(name):
-    """Find player in _player_adv_stats with multiple fallbacks."""
-    if name in _player_adv_stats:
-        return _player_adv_stats[name]
-    norm = _normalize_name(name)
-    if norm in _player_adv_stats:
-        return _player_adv_stats[norm]
-    key = norm.lower().strip()
-    for k, v in _player_adv_stats.items():
-        if _normalize_name(k).lower().strip() == key:
-            return v
-    parts = name.strip().split()
-    if len(parts) >= 2:
-        last = parts[-1].lower()
-        first_init = parts[0][0].lower() if parts[0] else ""
-        candidates = []
-        for k, v in _player_adv_stats.items():
-            kp = k.strip().split()
-            if len(kp) >= 2 and kp[-1].lower() == last and kp[0][0].lower() == first_init:
-                candidates.append(v)
-        if len(candidates) == 1:
-            return candidates[0]
-    return {}
-
-
-def _build_comparison(title, pos_label, name_a, name_b, stats_a, stats_b, comp_type):
-    """Build a comprehensive comparison card between two players."""
-    team_a = team_city(_player_team_map.get(name_a, "") or _salary_team_lookup.get(name_a, ""))
-    team_b = team_city(_player_team_map.get(name_b, "") or _salary_team_lookup.get(name_b, ""))
-    sal_a = _player_salary_map.get(name_a, "")
-    sal_b = _player_salary_map.get(name_b, "")
-
-    # Full stats with robust fallback
-    full_a = _find_full_stats(name_a)
-    full_b = _find_full_stats(name_b)
-
-    # Diagnostic: log what we found
-    log.info(f"  [COMP] '{name_a}' full_stats: PTS={full_a.get('PTS', 'MISSING')}, "
-             f"REB={full_a.get('REB', 'MISSING')}, GP={full_a.get('GP', 'MISSING')} "
-             f"(dict size={len(_player_full_stats)})")
-    if not full_a:
-        log.warning(f"  [COMP] No full stats for '{name_a}' "
-                    f"(dict has {len(_player_full_stats)} entries, "
-                    f"sample keys: {list(_player_full_stats.keys())[:5]})")
-    if not full_b:
-        log.warning(f"  [COMP] No full stats for '{name_b}' "
-                    f"(dict has {len(_player_full_stats)} entries)")
-
-    # ALWAYS merge basics from ratings cache (authoritative for PTS/REB/AST)
-    if stats_a:
-        if not full_a:
-            full_a = {}
-        for k, rk in [("PTS", "pts"), ("REB", "reb"), ("AST", "ast")]:
-            if not full_a.get(k):
-                try:
-                    v = stats_a.get(rk, "")
-                    if v and str(v).strip():
-                        full_a[k] = float(v)
-                except: pass
-        if not full_a.get("GP"):
-            try:
-                v = stats_a.get("games", "")
-                if v and str(v).strip():
-                    full_a["GP"] = int(float(v))
-            except: pass
-    if stats_b:
-        if not full_b:
-            full_b = {}
-        for k, rk in [("PTS", "pts"), ("REB", "reb"), ("AST", "ast")]:
-            if not full_b.get(k):
-                try:
-                    v = stats_b.get(rk, "")
-                    if v and str(v).strip():
-                        full_b[k] = float(v)
-                except: pass
-        if not full_b.get("GP"):
-            try:
-                v = stats_b.get("games", "")
-                if v and str(v).strip():
-                    full_b["GP"] = int(float(v))
-            except: pass
-
-    adv_a = _find_adv_stats(name_a)
-    adv_b = _find_adv_stats(name_b)
-
-    def _s(label, ka, kb=None, src_a=None, src_b=None, fmt="1", higher=True):
-        if kb is None:
-            kb = ka
-        sa = src_a if src_a is not None else full_a
-        sb = src_b if src_b is not None else full_b
-        va = sa.get(ka, 0) or 0
-        vb = sb.get(kb, 0) or 0
-        if isinstance(va, str):
-            try: va = float(va)
-            except: va = 0
-        if isinstance(vb, str):
-            try: vb = float(vb)
-            except: vb = 0
-        if higher:
-            winner = "A" if va > vb else "B" if vb > va else "tie"
-        else:
-            winner = "B" if va > vb else "A" if vb > va else "tie"
-        return {"label": label, "valA": va, "valB": vb, "winner": winner, "fmt": fmt}
-
-    sections = []
-
-    # COUNTING STATS
-    counting = [
-        _s("Points", "PTS"), _s("Rebounds", "REB"), _s("Assists", "AST"),
-        _s("Steals", "STL"), _s("Blocks", "BLK"),
-        _s("FG%", "FG_PCT", fmt="pct"), _s("3P%", "FG3_PCT", fmt="pct"),
-        _s("FT%", "FT_PCT", fmt="pct"),
-        _s("Turnovers", "TOV", higher=False),
-    ]
-    if any(c["valA"] != 0 or c["valB"] != 0 for c in counting):
-        sections.append({"label": "COUNTING STATS", "stats": counting})
-
-    # ADVANCED STATS
-    adv = [
-        {"label": "Rating", "valA": stats_a["rating"], "valB": stats_b["rating"],
-         "winner": "A" if stats_a["rating"] > stats_b["rating"] else "B" if stats_b["rating"] > stats_a["rating"] else "tie",
-         "fmt": "2"},
-    ]
-    if adv_a.get("PLUS_MINUS") is not None or adv_b.get("PLUS_MINUS") is not None:
-        adv.append(_s("Plus/Minus", "PLUS_MINUS", src_a=adv_a, src_b=adv_b, fmt="s1"))
-    if adv_a.get("NET_RATING") is not None or adv_b.get("NET_RATING") is not None:
-        adv.append(_s("Net Rating", "NET_RATING", src_a=adv_a, src_b=adv_b, fmt="s1"))
-    sections.append({"label": "ADVANCED", "stats": adv})
-
-    # DEFENSE - compute FG+/- from DFG% minus xFG%
-    def_stats = []
-    dfg_a = dfg_b = xfg_a = xfg_b = None
-    for k in ["D_FG_PCT", "DEF_FG_PCT"]:
-        if dfg_a is None and adv_a.get(k) is not None:
-            dfg_a = adv_a[k]
-        if dfg_b is None and adv_b.get(k) is not None:
-            dfg_b = adv_b[k]
-    for k in ["NORMAL_FG_PCT", "EXPECTED_FG_PCT"]:
-        if xfg_a is None and adv_a.get(k) is not None:
-            xfg_a = adv_a[k]
-        if xfg_b is None and adv_b.get(k) is not None:
-            xfg_b = adv_b[k]
-    if dfg_a is not None or dfg_b is not None:
-        def_stats.append({"label": "Def FG%", "valA": dfg_a or 0, "valB": dfg_b or 0,
-                          "winner": ("A" if (dfg_a or 0) < (dfg_b or 0) else "B" if (dfg_b or 0) < (dfg_a or 0) else "tie"),
-                          "fmt": "pct"})
-    if xfg_a is not None or xfg_b is not None:
-        def_stats.append({"label": "Exp FG%", "valA": xfg_a or 0, "valB": xfg_b or 0,
-                          "winner": "tie", "fmt": "pct"})  # xFG% is context, no winner
-    # FG+/- = DFG% - xFG%, converted to percentage points
-    if (dfg_a is not None and xfg_a is not None) or (dfg_b is not None and xfg_b is not None):
-        diff_a = round(((dfg_a or 0) - (xfg_a or 0)) * 100, 1)
-        diff_b = round(((dfg_b or 0) - (xfg_b or 0)) * 100, 1)
-        winner = "A" if diff_a < diff_b else "B" if diff_b < diff_a else "tie"
-        def_stats.append({"label": "FG+/-", "valA": diff_a, "valB": diff_b,
-                          "winner": winner, "fmt": "s1"})
-    if def_stats:
-        sections.append({"label": "DEFENSE", "stats": def_stats})
-
-    # CLUTCH (per-game averages)
-    cl = []
-    cgp_a = adv_a.get("CLUTCH_GP", 1) or 1
-    cgp_b = adv_b.get("CLUTCH_GP", 1) or 1
-    for label, key in [("Points", "CLUTCH_PTS"), ("Rebounds", "CLUTCH_REB"), ("Assists", "CLUTCH_AST"),
-                        ("Steals", "CLUTCH_STL"), ("Blocks", "CLUTCH_BLK")]:
-        va_raw = adv_a.get(key)
-        vb_raw = adv_b.get(key)
-        if va_raw is not None or vb_raw is not None:
-            va = round((va_raw or 0) / cgp_a, 1)
-            vb = round((vb_raw or 0) / cgp_b, 1)
-            winner = "A" if va > vb else "B" if vb > va else "tie"
-            cl.append({"label": label, "valA": va, "valB": vb, "winner": winner, "fmt": "1"})
-    if cl:
-        sections.append({"label": "CLUTCH", "stats": cl})
-
-    # HUSTLE (per-game averages)
-    hu = []
-    hgp_a = adv_a.get("HUSTLE_GP", 1) or 1
-    hgp_b = adv_b.get("HUSTLE_GP", 1) or 1
-    for label, key in [("Contested", "CONTESTED_SHOTS"), ("Deflections", "DEFLECTIONS"), ("Charges", "CHARGES_DRAWN")]:
-        va_raw = adv_a.get(key)
-        vb_raw = adv_b.get(key)
-        if va_raw is not None or vb_raw is not None:
-            va = round((va_raw or 0) / hgp_a, 1)
-            vb = round((vb_raw or 0) / hgp_b, 1)
-            winner = "A" if va > vb else "B" if vb > va else "tie"
-            hu.append({"label": label, "valA": va, "valB": vb, "winner": winner, "fmt": "1"})
-    if hu:
-        sections.append({"label": "HUSTLE", "stats": hu})
-
-    # GP from full stats or ratings cache
-    gp_a = int(full_a.get("GP", 0) or 0)
-    gp_b = int(full_b.get("GP", 0) or 0)
-    if gp_a == 0:
-        try: gp_a = int(stats_a.get("games", 0))
-        except: pass
-    if gp_b == 0:
-        try: gp_b = int(stats_b.get("games", 0))
-        except: pass
-
-    # Compute section scores and overall score
-    total_a = total_b = 0
-    for sec in sections:
-        sa = sb = 0
-        for st in sec["stats"]:
-            if st["winner"] == "A":
-                sa += 1
-            elif st["winner"] == "B":
-                sb += 1
-        sec["scoreA"] = sa
-        sec["scoreB"] = sb
-        total_a += sa
-        total_b += sb
-
-    return {
-        "isComparison": True,
-        "compType": comp_type,
-        "title": title,
-        "subtitle": pos_label,
-        "playerA": {
-            "name": name_a, "team": team_a, "salary": sal_a,
-            "country": _PLAYER_COUNTRY.get(name_a, ""),
-            "gp": gp_a,
-        },
-        "playerB": {
-            "name": name_b, "team": team_b, "salary": sal_b,
-            "country": _PLAYER_COUNTRY.get(name_b, ""),
-            "gp": gp_b,
-        },
-        "sections": sections,
-        "scoreA": total_a,
-        "scoreB": total_b,
-    }
-
-
-def fetch_comparisons():
-    """Build comparison screens: positional rankings, tonight's matchups, All-Star H2H."""
-    global last_good_comparisons
-
-    if "comp" in comparisons_cache:
-        return comparisons_cache["comp"]
-
-    # Ensure advanced stats are loaded
-    fetch_advanced_stats()
-
-    player_stats = dict(_player_stats_cache)
-    if not player_stats or not _player_position_map:
-        log.info("Comparisons: waiting for ratings/depth data")
-        return last_good_comparisons
-
-    screens = []
-
-    # ── OPTION C: Positional Power Rankings ──
-    for pos in ["PG", "SG", "SF", "PF", "C"]:
-        players_at_pos = []
-        for name, p_pos in _player_position_map.items():
-            if p_pos != pos:
-                continue
-            stats = player_stats.get(name)
-            if not stats:
-                continue
-            team = team_city(_player_team_map.get(name, "") or _salary_team_lookup.get(name, ""))
-            players_at_pos.append({
-                "rank": 0, "name": name, "team": team,
-                "rating": stats["rating"], "ratingDisplay": stats["ratingDisplay"],
-                "games": stats["games"], "pts": stats["pts"],
-                "reb": stats["reb"], "ast": stats["ast"],
-                "country": _PLAYER_COUNTRY.get(name, ""),
-            })
-        players_at_pos.sort(key=lambda p: p["rating"], reverse=True)
-        top = players_at_pos[:20]
-        for i, p in enumerate(top):
-            p["rank"] = i + 1
-        if top:
-            avg_top5 = sum(p["rating"] for p in top[:5]) / min(5, len(top))
-            screens.append({
-                "title": f"Top {_POS_LABELS[pos]}s — Global Rating",
-                "subtitle": f"Starting {_POS_LABELS[pos].lower()}s | Top 5 avg: {avg_top5:.2f}",
-                "isPositional": True,
-                "players": top,
-            })
-
-    log.info(f"Comparisons: {len(screens)} positional screens")
-
-    # ── OPTION A: Tonight's Matchups ──
-    matchup_count = 0
-    try:
-        scores_data = fetch_scores()
-        if scores_data:
-            for game in scores_data:
-                away_abbr = game.get("away", {}).get("abbr", "")
-                home_abbr = game.get("home", {}).get("abbr", "")
-                if not away_abbr or not home_abbr:
-                    continue
-
-                away_team = _find_depth_team(away_abbr)
-                home_team = _find_depth_team(home_abbr)
-                if not away_team or not home_team:
-                    continue
-
-                away_st = _depth_starters.get(away_team, [])
-                home_st = _depth_starters.get(home_team, [])
-
-                # Match starters by position, pick best matchup (highest combined rating)
-                best = None
-                best_combined = 0
-                for a in away_st:
-                    for h in home_st:
-                        if not _positions_similar(a["pos"], h["pos"]):
-                            continue
-                        a_stats = player_stats.get(a["name"])
-                        h_stats = player_stats.get(h["name"])
-                        if not a_stats or not h_stats:
-                            continue
-                        combined = a_stats["rating"] + h_stats["rating"]
-                        if combined > best_combined:
-                            best_combined = combined
-                            best = (a, h, a_stats, h_stats)
-
-                if best:
-                    a_st, h_st, a_stats, h_stats = best
-                    pos = a_st["pos"] if a_st["pos"] == h_st["pos"] else f"{a_st['pos']}/{h_st['pos']}"
-                    screens.append(_build_comparison(
-                        f"Tonight — {team_city(away_abbr)} at {team_city(home_abbr)}",
-                        _POS_LABELS.get(pos, pos),
-                        a_st["name"], h_st["name"],
-                        a_stats, h_stats,
-                        "matchup",
-                    ))
-                    matchup_count += 1
-    except Exception as e:
-        log.warning(f"Comparisons: tonight's matchups error: {e}")
-
-    log.info(f"Comparisons: {matchup_count} tonight's matchup screens")
-
-    # ── GAME PREVIEWS (5v5 starter matchup cards) ──
-    preview_count = 0
-    try:
-        # Build a unified list of game matchups from all sources
-        preview_games = []
-
-        # Source 1: Today's scoreboard — ALL games (scheduled, live, final)
-        if not scores_data:
-            scores_data = fetch_scores()
-        if scores_data:
-            for game in scores_data:
-                away_abbr = game.get("away", {}).get("abbr", "")
-                home_abbr = game.get("home", {}).get("abbr", "")
-                tip_time = game.get("clock", "") or "TBD"
-                away_tid = game.get("away", {}).get("teamId", "")
-                home_tid = game.get("home", {}).get("teamId", "")
-                if away_abbr and home_abbr:
-                    preview_games.append({
-                        "away_abbr": away_abbr, "home_abbr": home_abbr,
-                        "away_tid": away_tid, "home_tid": home_tid,
-                        "tip": tip_time, "label": "Today",
-                    })
-
-        # Source 2: Only fetch future games if there are NO games today
-        if not preview_games:
-            upcoming = _get_upcoming_games()
-            if upcoming:
-                for ug in upcoming:
-                    preview_games.append({
-                        "away_abbr": ug["away_abbr"], "home_abbr": ug["home_abbr"],
-                        "away_tid": "", "home_tid": "",
-                        "tip": ug.get("time", "TBD"), "label": ug.get("date", ""),
-                    })
-
-        for pg in preview_games:
-            away_abbr = pg["away_abbr"]
-            home_abbr = pg["home_abbr"]
-
-            away_team_name = _find_depth_team(away_abbr)
-            home_team_name = _find_depth_team(home_abbr)
-            if not away_team_name or not home_team_name:
-                continue
-
-            away_starters = _depth_starters.get(away_team_name, [])
-            home_starters = _depth_starters.get(home_team_name, [])
-            if len(away_starters) < 3 or len(home_starters) < 3:
-                continue
-
-            # Build 5 position matchup rows
-            pos_order = ["PG", "SG", "SF", "PF", "C"]
-            matchups = []
-            away_totals = {"rating": 0, "pts": 0, "reb": 0, "ast": 0, "count": 0}
-            home_totals = {"rating": 0, "pts": 0, "reb": 0, "ast": 0, "count": 0}
-
-            for pos in pos_order:
-                a_player = next((s for s in away_starters if s["pos"] == pos), None)
-                h_player = next((s for s in home_starters if s["pos"] == pos), None)
-
-                def _build_preview_player(p):
-                    if not p:
-                        return {"name": "—", "rating": 0, "pts": 0, "reb": 0, "ast": 0,
-                                "country": "", "questionable": False, "salary": ""}
-                    name = p["name"]
-                    sc = player_stats.get(name, {})
-                    fs = _find_full_stats(name)
-                    rating = sc.get("rating", 0) or 0
-                    pts = float(fs.get("PTS", 0) or sc.get("pts", 0) or 0)
-                    reb = float(fs.get("REB", 0) or sc.get("reb", 0) or 0)
-                    ast = float(fs.get("AST", 0) or sc.get("ast", 0) or 0)
-                    return {
-                        "name": name,
-                        "rating": round(rating, 2),
-                        "pts": round(pts, 1),
-                        "reb": round(reb, 1),
-                        "ast": round(ast, 1),
-                        "country": _PLAYER_COUNTRY.get(name, ""),
-                        "questionable": name in _questionable_players,
-                        "salary": _player_salary_map.get(name, ""),
-                    }
-
-                ap = _build_preview_player(a_player)
-                hp = _build_preview_player(h_player)
-                matchups.append({"pos": pos, "away": ap, "home": hp})
-
-                if ap["name"] != "—":
-                    away_totals["rating"] += ap["rating"]
-                    away_totals["pts"] += ap["pts"]
-                    away_totals["reb"] += ap["reb"]
-                    away_totals["ast"] += ap["ast"]
-                    away_totals["count"] += 1
-                if hp["name"] != "—":
-                    home_totals["rating"] += hp["rating"]
-                    home_totals["pts"] += hp["pts"]
-                    home_totals["reb"] += hp["reb"]
-                    home_totals["ast"] += hp["ast"]
-                    home_totals["count"] += 1
-
-            # Collect injuries for both teams
-            away_injuries = []
-            home_injuries = []
-            for name in _questionable_players:
-                team_of_player = _player_team_map.get(name, "") or _salary_team_lookup.get(name, "")
-                if not team_of_player:
-                    continue
-                tc = team_city(team_of_player)
-                ac2 = team_city(away_abbr)
-                hc2 = team_city(home_abbr)
-                rating = (player_stats.get(name, {}) or {}).get("rating", 0) or 0
-                if tc == ac2 and rating > 0:
-                    away_injuries.append({"name": name, "rating": round(rating, 2)})
-                elif tc == hc2 and rating > 0:
-                    home_injuries.append({"name": name, "rating": round(rating, 2)})
-
-            away_injuries.sort(key=lambda x: x["rating"], reverse=True)
-            home_injuries.sort(key=lambda x: x["rating"], reverse=True)
-
-            ac = away_totals["count"] or 1
-            hc = home_totals["count"] or 1
-            away_city = team_city(away_abbr)
-            home_city = team_city(home_abbr)
-
-            away_avg_rat = round(away_totals["rating"] / ac, 2)
-            home_avg_rat = round(home_totals["rating"] / hc, 2)
-
-            screens.append({
-                "isPreview": True,
-                "title": f"Game Preview — {away_city} at {home_city}",
-                "subtitle": (pg.get("label", "") + " · " + pg.get("tip", "")).strip(" ·") or "Upcoming",
-                "awayCity": away_city,
-                "homeCity": home_city,
-                "awayAbbr": away_abbr,
-                "homeAbbr": home_abbr,
-                "awayTeamId": pg.get("away_tid", ""),
-                "homeTeamId": pg.get("home_tid", ""),
-                "matchups": matchups,
-                "awayTotals": {
-                    "rating": away_avg_rat,
-                    "pts": round(away_totals["pts"], 1),
-                    "reb": round(away_totals["reb"], 1),
-                    "ast": round(away_totals["ast"], 1),
-                },
-                "homeTotals": {
-                    "rating": home_avg_rat,
-                    "pts": round(home_totals["pts"], 1),
-                    "reb": round(home_totals["reb"], 1),
-                    "ast": round(home_totals["ast"], 1),
-                },
-                "awayInjuries": away_injuries[:3],
-                "homeInjuries": home_injuries[:3],
-            })
-            preview_count += 1
-    except Exception as e:
-        log.warning(f"Comparisons: game previews error: {e}")
-        import traceback; traceback.print_exc()
-
-    log.info(f"Comparisons: {preview_count} game preview screens")
-
-    # ── OPTION D: All-Star Head-to-Head ──
-    allstar_pool = []
-    for name in _ALL_STARS:
-        stats = player_stats.get(name)
-        pos = _player_position_map.get(name, "")
-        if stats and pos:
-            allstar_pool.append({"name": name, "pos": pos, "stats": stats})
-
-    random.shuffle(allstar_pool)
-    used = set()
-    allstar_count = 0
-    for i, a in enumerate(allstar_pool):
-        if a["name"] in used:
-            continue
-        for b in allstar_pool:
-            if a["name"] == b["name"] or b["name"] in used:
-                continue
-            if _positions_similar(a["pos"], b["pos"]):
-                used.add(a["name"])
-                used.add(b["name"])
-                pos = a["pos"] if a["pos"] == b["pos"] else f"{a['pos']}/{b['pos']}"
-                screens.append(_build_comparison(
-                    "All-Star Head-to-Head",
-                    _POS_LABELS.get(pos, pos),
-                    a["name"], b["name"],
-                    a["stats"], b["stats"],
-                    "allstar",
-                ))
-                allstar_count += 1
-                break
-        if allstar_count >= 8:
-            break
-
-    log.info(f"Comparisons: {allstar_count} All-Star H2H screens (from {len(allstar_pool)} All-Stars with stats+position)")
-
-    # Shuffle ALL screens for random ordering
-    random.shuffle(screens)
-
-    if screens:
-        comparisons_cache["comp"] = screens
-        last_good_comparisons = screens
-        log.info(f"Cached {len(screens)} comparison screens total")
-
-    return screens
-
-
-@app.route("/api/comparisons")
-def api_comparisons():
-    """Return comparison screens."""
-    data = fetch_comparisons()
-    return jsonify({"screens": data, "count": len(data)})
-
-
-# ═══════════════════════════════════════
-# GAME PREVIEWS
-# ═══════════════════════════════════════
-
-previews_cache = TTLCache(maxsize=1, ttl=900)  # 15 min
-last_good_previews = []
-
-_NBA_SCHEDULE_URL = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
-
-
-def _get_upcoming_games():
-    """Get upcoming games from NBA schedule endpoint (future dates only)."""
-    from datetime import date as dt_date
-
-    # Fetch NBA schedule endpoint for future game dates
-    try:
-        resp = requests.get(_NBA_SCHEDULE_URL, headers=_NBA_HEADERS, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-
-        today = dt_date.today()
-        today_str = today.strftime("%m/%d/%Y")
-
-        upcoming = []
-        game_dates = data.get("leagueSchedule", {}).get("gameDates", [])
-
-        for gd in game_dates:
-            date_str = gd.get("gameDate", "")
-            # Parse date — format varies: "02/20/2026 12:00:00 AM" or "2026-02-20"
-            game_date = None
-            for fmt in ["%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]:
-                try:
-                    game_date = datetime.strptime(date_str.split(" ")[0] if " " in date_str and "T" not in date_str else date_str.split("T")[0],
-                                                  fmt.split(" ")[0] if " " in fmt else fmt).date()
-                    break
-                except:
-                    continue
-            if not game_date:
-                continue
-            if game_date <= today:
-                continue  # Skip today (handled by scoreboard) and past dates
-
-            display_date = game_date.strftime("%b %d")
-            date_had_games = False
-            for g in gd.get("games", []):
-                away = g.get("awayTeam", {})
-                home = g.get("homeTeam", {})
-                away_abbr = away.get("teamTricode", away.get("teamAbbreviation", ""))
-                home_abbr = home.get("teamTricode", home.get("teamAbbreviation", ""))
-                if not away_abbr or not home_abbr:
-                    continue
-                time_str = ""
-                gst = g.get("gameStatusText", g.get("gameDateTimeEst", ""))
-                if gst:
-                    # Extract time portion
-                    for part in gst.split():
-                        if ":" in part or "pm" in part.lower() or "am" in part.lower():
-                            time_str += part + " "
-                    time_str = time_str.strip() or gst
-
-                upcoming.append({
-                    "away_abbr": away_abbr,
-                    "home_abbr": home_abbr,
-                    "away_name": away.get("teamName", away_abbr),
-                    "home_name": home.get("teamName", home_abbr),
-                    "time": time_str or "TBD",
-                    "date": display_date,
-                })
-                date_had_games = True
-
-            if date_had_games:
-                break  # Just get the next game date
-
-        if upcoming:
-            log.info(f"  Schedule: found {len(upcoming)} upcoming games on next game date")
-            return upcoming
-
-    except Exception as e:
-        log.warning(f"  NBA schedule fetch failed: {e}")
-
-    return []
-
-
-def fetch_game_previews():
-    """Build game preview screens from upcoming games + depth/stats data."""
-    global last_good_previews
-
-    if "pv" in previews_cache:
-        return previews_cache["pv"]
-
-    log.info("Building game previews...")
-
-    upcoming = _get_upcoming_games()
-    if not upcoming:
-        log.info("  No upcoming games found for previews")
-        return last_good_previews
-
-    # Get player stats for ratings
-    player_stats = dict(_player_stats_cache)
-
-    screens = []
-    for game in upcoming[:8]:  # Max 8 preview screens
-        away_abbr = game["away_abbr"]
-        home_abbr = game["home_abbr"]
-
-        away_team = _find_depth_team(away_abbr)
-        home_team = _find_depth_team(home_abbr)
-
-        if not away_team or not home_team:
-            log.info(f"  Preview skip: can't find depth for {away_abbr} or {home_abbr}")
-            continue
-
-        away_starters = _depth_starters.get(away_team, [])
-        home_starters = _depth_starters.get(home_team, [])
-
-        if not away_starters or not home_starters:
-            continue
-
-        # Build starter data with stats
-        def build_starter_data(starters, team_name_full):
-            players = []
-            for s in starters:
-                name = s["name"]
-                pos = s["pos"]
-                stats = player_stats.get(name, {})
-                full = _find_full_stats(name)
-                adv = _find_adv_stats(name)
-
-                rating = stats.get("rating", 0)
-                pts = full.get("PTS", 0) if full else 0
-                reb = full.get("REB", 0) if full else 0
-                ast = full.get("AST", 0) if full else 0
-                stl = full.get("STL", 0) if full else 0
-                blk = full.get("BLK", 0) if full else 0
-                gp = full.get("GP", 0) if full else 0
-
-                # Fallback to ratings cache stats
-                if not pts and stats:
-                    try: pts = float(stats.get("pts", 0))
-                    except: pass
-                if not reb and stats:
-                    try: reb = float(stats.get("reb", 0))
-                    except: pass
-                if not ast and stats:
-                    try: ast = float(stats.get("ast", 0))
-                    except: pass
-
-                # Check injury status
-                is_questionable = name in _questionable_players
-                is_out = False
-                # Check full injury list
-                for inj_name in _questionable_players:
-                    if inj_name == name:
-                        break
-
-                players.append({
-                    "name": name,
-                    "pos": pos,
-                    "rating": round(rating, 2) if rating else 0,
-                    "pts": round(pts, 1) if pts else 0,
-                    "reb": round(reb, 1) if reb else 0,
-                    "ast": round(ast, 1) if ast else 0,
-                    "stl": round(stl, 1) if stl else 0,
-                    "blk": round(blk, 1) if blk else 0,
-                    "gp": int(gp) if gp else 0,
-                    "country": _PLAYER_COUNTRY.get(name, ""),
-                    "questionable": is_questionable,
-                    "netRating": round(adv.get("NET_RATING", 0), 1) if adv else 0,
-                })
-            return players
-
-        away_data = build_starter_data(away_starters, away_team)
-        home_data = build_starter_data(home_starters, home_team)
-
-        # Team aggregates
-        def team_agg(players):
-            rated = [p for p in players if p["rating"] > 0]
-            if not rated:
-                return {"avgRating": 0, "totalPts": 0, "totalReb": 0, "totalAst": 0}
-            return {
-                "avgRating": round(sum(p["rating"] for p in rated) / len(rated), 2),
-                "totalPts": round(sum(p["pts"] for p in players), 1),
-                "totalReb": round(sum(p["reb"] for p in players), 1),
-                "totalAst": round(sum(p["ast"] for p in players), 1),
-            }
-
-        away_agg = team_agg(away_data)
-        home_agg = team_agg(home_data)
-
-        # Injuries for each team (non-starters who are out)
-        away_city = team_city(away_abbr)
-        home_city = team_city(home_abbr)
-
-        screens.append({
-            "isPreview": True,
-            "title": f"Game Preview: {away_city} at {home_city}",
-            "subtitle": f"{game['date']} · {game['time']}",
-            "awayTeam": {
-                "city": away_city,
-                "abbr": away_abbr,
-                "starters": away_data,
-                "agg": away_agg,
-            },
-            "homeTeam": {
-                "city": home_city,
-                "abbr": home_abbr,
-                "starters": home_data,
-                "agg": home_agg,
-            },
-        })
-
-    if screens:
-        previews_cache["pv"] = screens
-        last_good_previews = screens
-        log.info(f"Cached {len(screens)} game preview screens")
-
-    return screens
-
-
-@app.route("/api/previews")
-def api_previews():
-    """Return game preview screens."""
-    data = fetch_game_previews()
     return jsonify({"screens": data, "count": len(data)})
 
 
@@ -2787,9 +1618,8 @@ def fetch_team_ratings():
     # One screen per team
     screens = []
     for t in team_list:
-        city = team_city(t["name"])
         screens.append({
-            "title": f"{city}",
+            "title": f"{t['name']}",
             "subtitle": f"Team average: {t['avgDisplay']} (Top 6 players)",
             "isForm": False,
             "players": t["players"],
@@ -2862,7 +1692,7 @@ def fetch_hist_salaries():
             continue
         if len(row) < 4:
             continue
-        team = team_city(row[0].strip())
+        team = row[0].strip()
         year_str = row[1].strip()
         player = row[2].strip()
         salary_str = row[3].strip()
@@ -2948,8 +1778,8 @@ _AVG_CATS = [
     ("FG3M", "Three-Pointers Per Game"),
     ("FGM", "Field Goals Per Game"),
     ("FTM", "Free Throws Per Game"),
-    ("OREB", "Offensive Rebounds Per Game"),
-    ("DREB", "Defensive Rebounds Per Game"),
+    ("OREB", "Offensive Reb Per Game"),
+    ("DREB", "Defensive Reb Per Game"),
     ("TOV", "Turnovers Per Game"),
     ("MIN", "Minutes Per Game"),
 ]
@@ -3037,7 +1867,7 @@ def _build_leader_screens(api_headers, rows, categories, season, mode_label, min
             players.append({
                 "rank": rank,
                 "name": name,
-                "team": team_city(row[team_i]),
+                "team": row[team_i],
                 "gp": row[gp_i],
                 "value": val,
                 "valueDisplay": disp,
@@ -3072,40 +1902,25 @@ def fetch_counting_stats():
         screens.extend(_build_leader_screens(h_avg, rows_avg, _AVG_CATS, season, "Per Game"))
         log.info(f"  Per Game: {len(rows_avg)} players, {len(_AVG_CATS)} categories")
 
-        # Build comprehensive per-player stats for comparisons
-        col_map_full = {h: i for i, h in enumerate(h_avg)}
-        _player_full_stats.clear()
-        stat_keys = ["GP", "MIN", "FGM", "FGA", "FG_PCT", "FG3M", "FG3A", "FG3_PCT",
-                     "FTM", "FTA", "FT_PCT", "OREB", "DREB", "REB", "AST", "STL",
-                     "BLK", "TOV", "PF", "PTS", "EFF", "AST_TOV", "STL_TOV"]
-        for row in rows_avg:
-            p_i = col_map_full.get("PLAYER", 2)
-            raw_name = str(row[p_i]).strip()
-            norm_name = _normalize_name(raw_name)
-            d = {}
-            for k in stat_keys:
-                idx = col_map_full.get(k)
-                if idx is not None and idx < len(row):
-                    v = row[idx]
-                    if v is None:
-                        v = 0
-                    elif isinstance(v, str):
-                        try: v = float(v)
-                        except: v = 0
-                    d[k] = v
-            # Store under BOTH raw and normalized names
-            _player_full_stats[raw_name] = d
-            if norm_name != raw_name:
-                _player_full_stats[norm_name] = d
-        log.info(f"  Full stats populated for {len(_player_full_stats)} entries "
-                 f"(sample: LeBron={'LeBron James' in _player_full_stats}, "
-                 f"Brunson={'Jalen Brunson' in _player_full_stats})")
-
-        # Percentages (from PerGame data, with min GP + min attempts filter)
+        # Build full stats cache for comparisons
         col_map_avg = {h: i for i, h in enumerate(h_avg)}
         player_i = col_map_avg.get("PLAYER", 2)
         team_i = col_map_avg.get("TEAM", 4)
         gp_i = col_map_avg.get("GP", 5)
+        _player_full_stats.clear()
+        stat_keys = ["PTS", "REB", "AST", "STL", "BLK", "TOV", "FG_PCT", "FG3_PCT", "FT_PCT"]
+        for row in rows_avg:
+            name = _normalize_name(row[player_i])
+            d = {"GP": row[gp_i], "TEAM": row[team_i]}
+            for sk in stat_keys:
+                si = col_map_avg.get(sk)
+                if si is not None:
+                    d[sk] = row[si]
+            _player_full_stats[name] = d
+        log.info(f"  Full stats cache: {len(_player_full_stats)} players")
+        # Diagnostic: check LeBron name variants
+        lebron_keys = [k for k in _player_full_stats if 'james' in k.lower() or 'lebron' in k.lower()]
+        log.info(f"  LeBron variants in stats: {lebron_keys}")
 
         for stat_key, title, attempts_key, min_attempts in _PCT_CATS:
             stat_i = col_map_avg.get(stat_key)
@@ -3137,7 +1952,7 @@ def fetch_counting_stats():
                 players.append({
                     "rank": rank,
                     "name": name,
-                    "team": team_city(row[team_i]),
+                    "team": row[team_i],
                     "gp": row[gp_i],
                     "value": val,
                     "valueDisplay": disp,
@@ -3171,6 +1986,632 @@ def api_counting_stats():
     """Return season leader screens."""
     data = fetch_counting_stats()
     return jsonify({"screens": data, "count": len(data)})
+
+
+# ═══════════════════════════════════════
+# VALUE RANKINGS (Rating / Salary)
+# ═══════════════════════════════════════
+
+value_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min
+last_good_value = []
+
+
+def fetch_value_rankings():
+    """Compute best/worst value players by rating per $1M salary."""
+    global last_good_value
+
+    if "val" in value_cache:
+        return value_cache["val"]
+
+    log.info("Building value rankings...")
+
+    # Read Season block (col 14) from ratings sheet for rating + GP
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_RATINGS_SHEET_ID}"
+        f"/export?format=csv&gid={_RATINGS_GID}"
+    )
+    try:
+        resp = requests.get(csv_url, timeout=30)
+        resp.raise_for_status()
+        resp.encoding = 'utf-8'
+    except Exception as e:
+        log.warning(f"Value: ratings fetch failed: {e}")
+        return last_good_value
+
+    reader = list(csv.reader(io.StringIO(resp.text)))
+    if len(reader) < 2:
+        return last_good_value
+
+    # Collect all rated players from Season block (start_col=14)
+    start_col = 14
+    combined = []
+    for row_idx in range(1, len(reader)):
+        row = reader[row_idx]
+        if start_col >= len(row):
+            continue
+        name = row[start_col].strip() if start_col < len(row) else ""
+        if not name:
+            continue
+        try:
+            rating = float(row[start_col + 1].strip())
+        except:
+            continue
+        try:
+            gp = int(row[start_col + 2].strip())
+        except:
+            gp = 0
+        try:
+            pts = row[start_col + 3].strip()
+        except:
+            pts = ""
+
+        salary = _player_salary_raw.get(name, 0)
+        if not salary or salary < 500_000:
+            continue
+        if gp < 10:
+            continue
+
+        salary_m = salary / 1_000_000
+        value = round(rating / salary_m, 2)
+        sal_compact = f"${salary_m:.1f}M" if salary_m >= 1 else f"${salary // 1000}K"
+        team = team_city(_player_team_map.get(name, "") or _salary_team_lookup.get(name, ""))
+        country = _PLAYER_COUNTRY.get(name, "")
+
+        combined.append({
+            "name": name, "team": team, "rating": rating,
+            "ratingDisplay": f"{rating:.2f}",
+            "salary": salary, "salaryCompact": sal_compact,
+            "value": value, "games": gp, "pts": pts,
+            "country": country,
+        })
+
+    if not combined:
+        log.warning("Value: no players with salary + rating + GP found")
+        return last_good_value
+
+    # Screen 1: Best Value — highest rating/$1M (all players min $500K)
+    best = [dict(p) for p in sorted(combined, key=lambda p: p["value"], reverse=True)[:20]]
+    for i, p in enumerate(best):
+        p["rank"] = i + 1
+
+    # Screen 2: Worst Value — lowest rating/$1M among $10M+ earners
+    big_earners = [p for p in combined if p["salary"] >= 10_000_000]
+    worst = [dict(p) for p in sorted(big_earners, key=lambda p: p["value"])[:20]]
+    for i, p in enumerate(worst):
+        p["rank"] = i + 1
+
+    # Screen 3: Lowest Rated $10M+ Players
+    overpaid = [dict(p) for p in sorted(big_earners, key=lambda p: p["rating"])[:20]]
+    for i, p in enumerate(overpaid):
+        p["rank"] = i + 1
+
+    # Screen 4: Best Bargains — highest-rated under $10M
+    bargains_pool = [p for p in combined if p["salary"] < 10_000_000]
+    bargains = [dict(p) for p in sorted(bargains_pool, key=lambda p: p["rating"], reverse=True)[:20]]
+    for i, p in enumerate(bargains):
+        p["rank"] = i + 1
+
+    screens = [
+        {"title": "Best Value — Rating per $1M", "subtitle": "Min $500K salary, 10+ GP", "data": best, "isValue": True, "valueType": "best"},
+        {"title": "Worst Value — Rating per $1M", "subtitle": "$10M+ earners only", "data": worst, "isValue": True, "valueType": "worst"},
+        {"title": "Lowest Rated $10M+ Players", "subtitle": "Sorted by raw rating", "data": overpaid, "isValue": True, "valueType": "overpaid"},
+        {"title": "Best Bargains — Under $10M", "subtitle": "Highest-rated affordable players", "data": bargains, "isValue": True, "valueType": "bargain"},
+    ]
+
+    value_cache["val"] = screens
+    last_good_value = screens
+    log.info(f"Cached {len(screens)} value screens ({len(combined)} eligible players)")
+    return screens
+
+
+@app.route("/api/value")
+def api_value():
+    """Return value ranking screens."""
+    data = fetch_value_rankings()
+    return jsonify({"screens": data, "count": len(data)})
+
+
+# ═══════════════════════════════════════
+# PLAYER COMPARISONS (Matchups)
+# ═══════════════════════════════════════
+
+comparisons_cache = TTLCache(maxsize=1, ttl=300)  # 5 min
+last_good_comparisons = {"screens": []}
+
+_ALL_STARS = {
+    # 2025 All-Stars
+    "Giannis Antetokounmpo", "Jayson Tatum", "Karl-Anthony Towns", "Donovan Mitchell",
+    "Jalen Brunson", "LaMelo Ball", "Cade Cunningham", "Jaylen Brown",
+    "Tyler Herro", "Evan Mobley", "Scottie Barnes", "Damian Lillard",
+    "Nikola Jokic", "Shai Gilgeous-Alexander", "LeBron James", "Kevin Durant",
+    "Stephen Curry", "Victor Wembanyama", "Anthony Edwards", "James Harden",
+    "De'Aaron Fox", "Alperen Sengun", "Domantas Sabonis", "Norman Powell",
+    # 2026 All-Stars (add/adjust as selected)
+    "Anthony Davis", "Luka Doncic", "Trae Young", "Tyrese Haliburton",
+    "Paolo Banchero", "Devin Booker", "Bam Adebayo", "Kyrie Irving",
+    "Jaren Jackson Jr.", "Franz Wagner", "Jalen Williams",
+}
+
+_POS_LABELS = {"PG": "Point Guard", "SG": "Shooting Guard", "SF": "Small Forward",
+               "PF": "Power Forward", "C": "Center"}
+_POS_COMPAT = {"PG": ["PG", "SG"], "SG": ["SG", "PG", "SF"], "SF": ["SF", "SG", "PF"],
+               "PF": ["PF", "SF", "C"], "C": ["C", "PF"]}
+
+
+def _find_stats(name):
+    """Find full stats for a player with fuzzy matching."""
+    if name in _player_full_stats:
+        return _player_full_stats[name]
+    # Normalize and try
+    norm = _normalize_name(name)
+    if norm in _player_full_stats:
+        return _player_full_stats[norm]
+    # Try _full_name_map reverse: "LeBron James" → check if any abbrev maps to this name
+    for abbr, full in _full_name_map.items():
+        if full == name and abbr in _player_full_stats:
+            return _player_full_stats[abbr]
+    # Case-insensitive + whitespace-normalized scan
+    name_lower = ' '.join(name.lower().split())
+    for k, v in _player_full_stats.items():
+        if ' '.join(k.lower().split()) == name_lower:
+            return v
+    # Last name + first initial
+    parts = name.split()
+    if len(parts) >= 2:
+        last = parts[-1].lower()
+        first_init = parts[0][0].upper()
+        for k, v in _player_full_stats.items():
+            kp = k.split()
+            if len(kp) >= 2 and kp[-1].lower() == last and kp[0][0].upper() == first_init:
+                return v
+    # Fallback: build minimal stats from team ratings data (PTS/REB/AST/GP)
+    for scr in (last_good_team_ratings or []):
+        for p in scr.get("players", []):
+            if p["name"] == name and p.get("ratingNum", 0) > 0:
+                d = {"GP": 0}
+                try: d["GP"] = int(p.get("games", 0))
+                except: pass
+                try: d["PTS"] = float(p.get("pts", 0))
+                except: pass
+                try: d["REB"] = float(p.get("reb", 0))
+                except: pass
+                try: d["AST"] = float(p.get("ast", 0))
+                except: pass
+                return d
+    return {}
+
+
+def _find_adv(name):
+    """Find advanced stats for a player with fuzzy matching."""
+    if name in _player_adv_stats:
+        return _player_adv_stats[name]
+    norm = _normalize_name(name)
+    if norm in _player_adv_stats:
+        return _player_adv_stats[norm]
+    # Try _full_name_map reverse
+    for abbr, full in _full_name_map.items():
+        if full == name and abbr in _player_adv_stats:
+            return _player_adv_stats[abbr]
+    # Case-insensitive scan
+    name_lower = ' '.join(name.lower().split())
+    for k, v in _player_adv_stats.items():
+        if ' '.join(k.lower().split()) == name_lower:
+            return v
+    parts = name.split()
+    if len(parts) >= 2:
+        last = parts[-1].lower()
+        first_init = parts[0][0].upper()
+        for k, v in _player_adv_stats.items():
+            kp = k.split()
+            if len(kp) >= 2 and kp[-1].lower() == last and kp[0][0].upper() == first_init:
+                return v
+    return {}
+
+
+def _get_rating(name):
+    """Get Season Global Rating for a player from team ratings cache."""
+    screens = last_good_team_ratings or []
+    for scr in screens:
+        for p in scr.get("players", []):
+            if p["name"] == name and p["ratingNum"]:
+                return p["ratingNum"]
+    return 0
+
+
+def _s(label, va, vb, fmt="1", invert=False):
+    """Build one stat row for a comparison card."""
+    va = va or 0
+    vb = vb or 0
+    if isinstance(va, str):
+        try: va = float(va)
+        except: va = 0
+    if isinstance(vb, str):
+        try: vb = float(vb)
+        except: vb = 0
+    if invert:
+        winner = "A" if va < vb else ("B" if vb < va else "tie")
+    else:
+        winner = "A" if va > vb else ("B" if vb > va else "tie")
+    return {"label": label, "a": round(va, 1), "b": round(vb, 1), "fmt": fmt, "winner": winner}
+
+
+def _build_comparison(name_a, name_b):
+    """Build comprehensive comparison between two players."""
+    stats_a = _find_stats(name_a)
+    stats_b = _find_stats(name_b)
+    adv_a = _find_adv(name_a)
+    adv_b = _find_adv(name_b)
+    rat_a = _get_rating(name_a)
+    rat_b = _get_rating(name_b)
+    team_a = team_city(_player_team_map.get(name_a, ""))
+    team_b = team_city(_player_team_map.get(name_b, ""))
+
+    sections = []
+
+    # COUNTING STATS
+    counting = []
+    counting.append(_s("Points", stats_a.get("PTS"), stats_b.get("PTS")))
+    counting.append(_s("Rebounds", stats_a.get("REB"), stats_b.get("REB")))
+    counting.append(_s("Assists", stats_a.get("AST"), stats_b.get("AST")))
+    counting.append(_s("Steals", stats_a.get("STL"), stats_b.get("STL")))
+    counting.append(_s("Blocks", stats_a.get("BLK"), stats_b.get("BLK")))
+    fg_a = (stats_a.get("FG_PCT") or 0) * 100 if stats_a.get("FG_PCT") else 0
+    fg_b = (stats_b.get("FG_PCT") or 0) * 100 if stats_b.get("FG_PCT") else 0
+    counting.append(_s("FG%", fg_a, fg_b, "1"))
+    fg3_a = (stats_a.get("FG3_PCT") or 0) * 100 if stats_a.get("FG3_PCT") else 0
+    fg3_b = (stats_b.get("FG3_PCT") or 0) * 100 if stats_b.get("FG3_PCT") else 0
+    counting.append(_s("3P%", fg3_a, fg3_b, "1"))
+    ft_a = (stats_a.get("FT_PCT") or 0) * 100 if stats_a.get("FT_PCT") else 0
+    ft_b = (stats_b.get("FT_PCT") or 0) * 100 if stats_b.get("FT_PCT") else 0
+    counting.append(_s("FT%", ft_a, ft_b, "1"))
+    counting.append(_s("Turnovers", stats_a.get("TOV"), stats_b.get("TOV"), "1", invert=True))
+    sections.append({"label": "COUNTING STATS", "stats": counting})
+
+    # ADVANCED
+    advanced = []
+    advanced.append(_s("Rating", rat_a, rat_b, "2"))
+    advanced.append(_s("Plus/Minus", adv_a.get("PLUS_MINUS"), adv_b.get("PLUS_MINUS"), "s1"))
+    advanced.append(_s("Net Rating", adv_a.get("NET_RATING"), adv_b.get("NET_RATING"), "s1"))
+    sections.append({"label": "ADVANCED", "stats": advanced})
+
+    # DEFENSE
+    defense = []
+    dfg_a = adv_a.get("D_FG_PCT") or 0
+    dfg_b = adv_b.get("D_FG_PCT") or 0
+    xfg_a = adv_a.get("NORMAL_FG_PCT") or 0
+    xfg_b = adv_b.get("NORMAL_FG_PCT") or 0
+    defense.append(_s("Def FG%", dfg_a * 100 if dfg_a else 0, dfg_b * 100 if dfg_b else 0, "1", invert=True))
+    defense.append({"label": "Exp FG%", "a": round(xfg_a * 100, 1) if xfg_a else 0,
+                     "b": round(xfg_b * 100, 1) if xfg_b else 0, "fmt": "1", "winner": "tie"})
+    diff_a = round(((dfg_a or 0) - (xfg_a or 0)) * 100, 1)
+    diff_b = round(((dfg_b or 0) - (xfg_b or 0)) * 100, 1)
+    defense.append({"label": "FG +/-", "a": diff_a, "b": diff_b, "fmt": "s1",
+                     "winner": "A" if diff_a < diff_b else ("B" if diff_b < diff_a else "tie")})
+    sections.append({"label": "DEFENSE", "stats": defense})
+
+    # CLUTCH
+    clutch = []
+    cgp_a = adv_a.get("CLUTCH_GP", 1) or 1
+    cgp_b = adv_b.get("CLUTCH_GP", 1) or 1
+    for lbl, key in [("Points", "CLUTCH_PTS"), ("Rebounds", "CLUTCH_REB"),
+                      ("Assists", "CLUTCH_AST"), ("Steals", "CLUTCH_STL"), ("Blocks", "CLUTCH_BLK")]:
+        va = round((adv_a.get(key, 0) or 0) / cgp_a, 1)
+        vb = round((adv_b.get(key, 0) or 0) / cgp_b, 1)
+        clutch.append(_s(lbl, va, vb))
+    sections.append({"label": "CLUTCH", "stats": clutch})
+
+    # HUSTLE
+    hustle = []
+    hgp_a = adv_a.get("HUSTLE_GP", 1) or 1
+    hgp_b = adv_b.get("HUSTLE_GP", 1) or 1
+    for lbl, key in [("Contested", "CONTESTED_SHOTS"), ("Deflections", "DEFLECTIONS"),
+                      ("Charges", "CHARGES_DRAWN")]:
+        va = round((adv_a.get(key, 0) or 0) / hgp_a, 2)
+        vb = round((adv_b.get(key, 0) or 0) / hgp_b, 2)
+        fmt = "2" if key == "CHARGES_DRAWN" else "1"
+        hustle.append(_s(lbl, va, vb, fmt))
+    sections.append({"label": "HUSTLE", "stats": hustle})
+
+    # Score each section
+    total_a = total_b = 0
+    for sec in sections:
+        sa = sb = 0
+        for st in sec["stats"]:
+            if st["winner"] == "A": sa += 1
+            elif st["winner"] == "B": sb += 1
+        sec["scoreA"] = sa
+        sec["scoreB"] = sb
+        total_a += sa
+        total_b += sb
+
+    gp_a = stats_a.get("GP", 0) or 0
+    gp_b = stats_b.get("GP", 0) or 0
+    sal_a = _player_salary_map.get(name_a, "—")
+    sal_b = _player_salary_map.get(name_b, "—")
+
+    return {
+        "nameA": name_a, "nameB": name_b,
+        "teamA": team_a, "teamB": team_b,
+        "posA": _player_position_map.get(name_a, ""),
+        "posB": _player_position_map.get(name_b, ""),
+        "countryA": _PLAYER_COUNTRY.get(name_a, ""),
+        "countryB": _PLAYER_COUNTRY.get(name_b, ""),
+        "gpA": gp_a, "gpB": gp_b,
+        "salaryA": sal_a, "salaryB": sal_b,
+        "scoreA": total_a, "scoreB": total_b,
+        "sections": sections,
+    }
+
+
+def fetch_advanced_stats():
+    """Fetch advanced/defense/clutch/hustle stats from GitHub JSON."""
+    global _player_adv_stats
+
+    url = "https://raw.githubusercontent.com/jsierrahoopshype/nba-player-data/main/nba-2025-26-data.json"
+    try:
+        resp = requests.get(url, headers=_HTTP_HEADERS, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        log.warning(f"Advanced stats fetch failed: {e}")
+        return
+
+    _player_adv_stats.clear()
+    datasets = [
+        ("advanced", {"PLUS_MINUS": "PLUS_MINUS", "NET_RATING": "NET_RATING"}),
+        ("defense", {"D_FG_PCT": "D_FG_PCT", "NORMAL_FG_PCT": "NORMAL_FG_PCT", "PCT_PLUSMINUS": "PCT_PLUSMINUS"}),
+    ]
+    # Advanced + Defense
+    for ds_key, fields in datasets:
+        ds = data.get(ds_key, [])
+        for row in ds:
+            name = _normalize_name(row.get("PLAYER_NAME") or row.get("PLAYER", ""))
+            if not name:
+                continue
+            if name not in _player_adv_stats:
+                _player_adv_stats[name] = {}
+            for src_key, dst_key in fields.items():
+                val = row.get(src_key)
+                if val is not None:
+                    _player_adv_stats[name][dst_key] = val
+
+    # Clutch
+    for row in data.get("clutch", []):
+        name = _normalize_name(row.get("PLAYER_NAME") or row.get("PLAYER", ""))
+        if not name:
+            continue
+        if name not in _player_adv_stats:
+            _player_adv_stats[name] = {}
+        d = _player_adv_stats[name]
+        d["CLUTCH_GP"] = row.get("GP") or row.get("G")
+        for k in ["PTS", "REB", "AST", "STL", "BLK"]:
+            d[f"CLUTCH_{k}"] = row.get(k)
+
+    # Hustle
+    for row in data.get("hustle", []):
+        name = _normalize_name(row.get("PLAYER_NAME") or row.get("PLAYER", ""))
+        if not name:
+            continue
+        if name not in _player_adv_stats:
+            _player_adv_stats[name] = {}
+        d = _player_adv_stats[name]
+        d["HUSTLE_GP"] = row.get("GP") or row.get("G")
+        d["CONTESTED_SHOTS"] = row.get("CONTESTED_SHOTS")
+        d["DEFLECTIONS"] = row.get("DEFLECTIONS")
+        d["CHARGES_DRAWN"] = row.get("CHARGES_DRAWN")
+
+    log.info(f"Advanced stats: {len(_player_adv_stats)} players loaded")
+    lebron_adv = [k for k in _player_adv_stats if 'james' in k.lower() or 'lebron' in k.lower()]
+    log.info(f"  LeBron variants in adv stats: {lebron_adv}")
+
+
+def fetch_comparisons():
+    """Build comparison screens: positional rankings, tonight's matchups, All-Star H2H."""
+    global last_good_comparisons
+
+    if "comp" in comparisons_cache:
+        return comparisons_cache["comp"]
+
+    if not _depth_starters or not _player_full_stats:
+        log.warning("Comparisons: missing depth/stats data, skipping")
+        return last_good_comparisons
+
+    screens = []
+
+    # 1) POSITIONAL POWER RANKINGS — top 20 starters per position
+    for pos in ["PG", "SG", "SF", "PF", "C"]:
+        players_at_pos = []
+        for name, p_pos in _player_position_map.items():
+            if p_pos != pos:
+                continue
+            rat = _get_rating(name)
+            stats = _find_stats(name)
+            if not rat:
+                continue
+            players_at_pos.append({
+                "rank": 0,
+                "name": name,
+                "team": team_city(_player_team_map.get(name, "")),
+                "rating": f"{rat:.2f}",
+                "ratingNum": rat,
+                "games": stats.get("GP", ""),
+                "pts": f"{stats.get('PTS', 0):.1f}" if stats.get("PTS") else "",
+                "reb": f"{stats.get('REB', 0):.1f}" if stats.get("REB") else "",
+                "ast": f"{stats.get('AST', 0):.1f}" if stats.get("AST") else "",
+                "country": _PLAYER_COUNTRY.get(name, ""),
+            })
+        players_at_pos.sort(key=lambda x: x["ratingNum"], reverse=True)
+        top = players_at_pos[:20]
+        for i, p in enumerate(top):
+            p["rank"] = i + 1
+        if top:
+            screens.append({
+                "title": f"{_POS_LABELS[pos]} Rankings — Global Rating",
+                "subtitle": f"Starting {pos}s only | Season rating",
+                "isPositional": True,
+                "players": top,
+            })
+
+    # 2) TONIGHT'S MATCHUPS — best starter vs starter per game
+    try:
+        score_data = fetch_scores()
+        games = score_data.get("games", [])
+        preview_games = [g for g in games]  # all today's games
+        if not preview_games:
+            # No games today — get next game date
+            upcoming = _get_upcoming_games()
+            preview_games = upcoming
+    except:
+        preview_games = []
+
+    for pg in preview_games:
+        away_abbr = pg.get("away", {}).get("abbr", "")
+        home_abbr = pg.get("home", {}).get("abbr", "")
+        away_city = team_city(away_abbr)
+        home_city = team_city(home_abbr)
+        # Find starters for these teams
+        away_starters = _depth_starters.get(away_city, [])
+        home_starters = _depth_starters.get(home_city, [])
+        if not away_starters or not home_starters:
+            continue
+
+        # Find best matchup: highest combined rating at compatible positions
+        best = None
+        best_combined = 0
+        for a in away_starters:
+            a_pos = a["pos"]
+            a_rat = _get_rating(a["name"])
+            if not a_rat:
+                continue
+            for h in home_starters:
+                if h["pos"] not in _POS_COMPAT.get(a_pos, [a_pos]):
+                    continue
+                h_rat = _get_rating(h["name"])
+                if not h_rat:
+                    continue
+                combined = a_rat + h_rat
+                if combined > best_combined:
+                    best_combined = combined
+                    best = (a["name"], h["name"])
+
+        if best:
+            comp = _build_comparison(best[0], best[1])
+            label = pg.get("label", "") or ""
+            tip = pg.get("tip", "") or pg.get("clock", "") or ""
+            subtitle = (label + " · " + tip).strip(" ·") or "Upcoming"
+            screens.append({
+                "title": f"{away_city} vs {home_city}",
+                "subtitle": subtitle,
+                "isComparison": True,
+                "isPreview": True,
+                "comparison": comp,
+            })
+
+    # 3) ALL-STAR HEAD-TO-HEAD — random pairs
+    available = [n for n in _ALL_STARS if n in _player_position_map and _get_rating(n)]
+    random.shuffle(available)
+    used = set()
+    allstar_pairs = []
+    for a in available:
+        if a in used:
+            continue
+        a_pos = _player_position_map.get(a, "")
+        compat = _POS_COMPAT.get(a_pos, [a_pos])
+        for b in available:
+            if b == a or b in used:
+                continue
+            b_pos = _player_position_map.get(b, "")
+            if b_pos in compat:
+                allstar_pairs.append((a, b))
+                used.add(a)
+                used.add(b)
+                break
+        if len(allstar_pairs) >= 20:
+            break
+
+    for a, b in allstar_pairs:
+        comp = _build_comparison(a, b)
+        screens.append({
+            "title": "All-Star Head-to-Head",
+            "subtitle": f"{_player_position_map.get(a, '')} vs {_player_position_map.get(b, '')}",
+            "isComparison": True,
+            "comparison": comp,
+        })
+
+    result = {"screens": screens}
+    comparisons_cache["comp"] = result
+    last_good_comparisons = result
+
+    # Diagnostic: log any All-Star with missing stats
+    for name in _ALL_STARS:
+        if name in _player_position_map:
+            s = _find_stats(name)
+            a = _find_adv(name)
+            if not s.get("PTS") and not s.get("STL"):
+                log.warning(f"  Comparison missing stats for {name}")
+
+    log.info(f"Comparisons: {len(screens)} screens ({sum(1 for s in screens if s.get('isPositional'))} positional, "
+             f"{sum(1 for s in screens if s.get('isPreview'))} preview, "
+             f"{sum(1 for s in screens if 'All-Star' in s.get('title',''))} all-star)")
+    return result
+
+
+def _get_upcoming_games():
+    """Fetch next game date from NBA schedule when no games today."""
+    try:
+        url = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
+        resp = requests.get(url, headers=_NBA_HEADERS, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        dates = data.get("leagueSchedule", {}).get("gameDates", [])
+        for gd in dates:
+            game_date = gd.get("gameDate", "")[:10]
+            if game_date <= today_str:
+                continue
+            games = []
+            for g in gd.get("games", []):
+                away = g.get("awayTeam", {})
+                home = g.get("homeTeam", {})
+                gt = g.get("gameDateTimeUTC", "")
+                tip = ""
+                if gt:
+                    try:
+                        from datetime import datetime as dt2
+                        utc = dt2.fromisoformat(gt.replace("Z", "+00:00"))
+                        from zoneinfo import ZoneInfo
+                        et = utc.astimezone(ZoneInfo("America/New_York"))
+                        tip = et.strftime("%-I:%M %p ET")
+                    except:
+                        pass
+                month_day = ""
+                try:
+                    parts = game_date.split("-")
+                    months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                    month_day = f"{months[int(parts[1])]} {int(parts[2])}"
+                except:
+                    pass
+                games.append({
+                    "away": {"abbr": away.get("teamTricode", ""), "teamId": away.get("teamId")},
+                    "home": {"abbr": home.get("teamTricode", ""), "teamId": home.get("teamId")},
+                    "status": "scheduled",
+                    "label": month_day,
+                    "tip": tip,
+                })
+            if games:
+                log.info(f"  Found {len(games)} upcoming games on {game_date}")
+                return games
+    except Exception as e:
+        log.warning(f"Upcoming games fetch failed: {e}")
+    return []
+
+
+@app.route("/api/comparisons")
+def api_comparisons():
+    """Return comparison/matchup screens."""
+    data = fetch_comparisons()
+    return jsonify(data)
 
 
 # ═══════════════════════════════════════
@@ -3467,15 +2908,15 @@ def fetch_depth():
     for t in all_teams:
         if t["name"].startswith("Unknown"):
             continue  # Don't pollute map with unidentified teams
-        starters_list = []
         for level in t["levels"]:
             for p in level["players"]:
                 _player_team_map[p["name"]] = t["name"]
-            if level["label"] == "Starters":
-                for p in level["players"]:
-                    _player_position_map[p["name"]] = p["pos"]
-                    starters_list.append({"pos": p["pos"], "name": p["name"]})
-        _depth_starters[t["name"]] = starters_list
+        # Populate starters (first level)
+        if t["levels"]:
+            starters = t["levels"][0]["players"]
+            _depth_starters[t["name"]] = [{"name": p["name"], "pos": p["pos"]} for p in starters]
+            for p in starters:
+                _player_position_map[p["name"]] = p["pos"]
 
     # Log all identified teams
     team_names = [t["name"] for t in all_teams]
@@ -3631,17 +3072,6 @@ def api_debug_boxscore():
 @app.route("/api/status")
 def api_status():
     """Health check — returns status of all data sources."""
-    # Sample full stats for debugging
-    sample_full = {}
-    for name in ["LeBron James", "Jalen Williams", "Nikola Jokic"]:
-        found = _find_full_stats(name)
-        sample_full[name] = {
-            "found": bool(found),
-            "PTS": found.get("PTS", "N/A"),
-            "REB": found.get("REB", "N/A"),
-            "GP": found.get("GP", "N/A"),
-        } if found else "NOT FOUND"
-
     return jsonify({
         "ok": True,
         "sources": {
@@ -3657,13 +3087,6 @@ def api_status():
             "scores": {
                 "cached": "scores" in scores_cache,
                 "last_count": len(last_good_scores),
-            },
-            "comparisons": {
-                "full_stats_count": len(_player_full_stats),
-                "adv_stats_count": len(_player_adv_stats),
-                "stats_cache_count": len(_player_stats_cache),
-                "sample_full_stats": sample_full,
-                "full_stats_sample_keys": list(_player_full_stats.keys())[:10],
             },
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -3755,11 +3178,6 @@ def _prewarm_caches():
         fetch_comparisons()
     except Exception as e:
         log.warning(f"Pre-warm comparisons failed: {e}")
-
-    try:
-        fetch_game_previews()
-    except Exception as e:
-        log.warning(f"Pre-warm game previews failed: {e}")
 
     log.info("Cache pre-warm complete")
 

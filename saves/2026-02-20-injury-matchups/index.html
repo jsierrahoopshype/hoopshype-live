@@ -386,8 +386,6 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .dep-row-out .dep-level{color:#f87171}
 .dep-row-out .dep-name{color:var(--text-tertiary)}
 .dep-name{font-family:var(--font-body);font-weight:500;font-size:13px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dep-player-out{color:#f87171 !important;opacity:0.7}
-.dep-player-quest{color:#eab308 !important}
 .dep-sal{font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary);margin-top:2px}
 .dep-team-header td{font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--text-primary);padding:10px var(--sp-3) 4px;border-bottom:1px solid var(--border-medium);letter-spacing:0.5px;text-transform:uppercase}
 
@@ -501,7 +499,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 </div>
 
 <script>
-const CONFIG={gameRotateInterval:20000,screenDurations:[9000,15000,15000,15000],rankingsRotateInterval:13500,tickerSpeed:50,autoModeHoursAfterLastGame:6,miniScoresVisible:5};
+const CONFIG={gameRotateInterval:20000,screenDurations:[9000,15000,15000,15000],rankingsRotateInterval:15000,tickerSpeed:50,autoModeHoursAfterLastGame:6,miniScoresVisible:5};
 
 const MOCK_GAMES=[
   {id:'1',status:'live',period:'3RD QTR',periodNum:3,clock:'4:32',venue:'TD Garden, Boston',
@@ -604,7 +602,7 @@ function buildRankingsScreens(){
   // Game Preview screens (first — most time-relevant)
   if(gamePreviewsData&&gamePreviewsData.screens){
     sectionStarts.gamePreviews=rankingsScreens.length;
-    // Build set of started/finished game keys to skip from previews
+    // Build set of live/final game keys to skip
     const liveKeys=new Set();
     if(liveGames&&liveGames.length){
       for(const g of liveGames){
@@ -613,7 +611,6 @@ function buildRankingsScreens(){
         }
       }
     }
-    let previewsAdded=0;
     for(const scr of gamePreviewsData.screens){
       const key=scr.away.abbr+'@'+scr.home.abbr;
       if(liveKeys.has(key)) continue; // Skip started games
@@ -624,11 +621,7 @@ function buildRankingsScreens(){
         isGamePreview:true,
         preview:scr
       });
-      previewsAdded++;
     }
-    console.log(`[BUILD] Previews: ${previewsAdded}/${gamePreviewsData.screens.length} added (${liveKeys.size} live/final filtered)`);
-  } else {
-    console.log('[BUILD] No gamePreviewsData yet');
   }
   // Milestones
   if(milestonesData&&milestonesData.screens){
@@ -833,13 +826,6 @@ function buildRankingsScreens(){
       });
     }
   }
-  // Log section summary
-  const secSummary=Object.keys(sectionStarts).map(s=>{const b=_getSectionBounds(s);return `${s}:${b?b.count:0}`;}).join(', ');
-  console.log(`[BUILD] Total: ${rankingsScreens.length} screens — ${secSummary}`);
-  // Ensure rotation timer is running (does NOT reset section walk)
-  if(currentMode==='rankings'&&rankingsScreens.length>0){
-    _ensureRotation();
-  }
 }
 function pollSalaries(){
   fetch('/api/salaries').then(r=>r.json()).then(data=>{
@@ -946,7 +932,9 @@ function pollGamePreviews(){
       gamePreviewsData=data;
       buildRankingsScreens();
       console.log('Game previews loaded:',data.screens.length,'screens');
-      if(currentMode==='rankings') _updateNextGamesBar();
+      if(currentMode==='rankings'){
+        renderNextGames(data.screens.filter(s=>s.previewPage===1).map(s=>({away:s.away.abbr,home:s.home.abbr,time:(s.dateLabel?s.dateLabel+' ':'')+s.tipoff})));
+      }
     }
   }).catch(e=>console.warn('Game previews fetch error:',e));
 }
@@ -1170,9 +1158,6 @@ function renderScreen1(g){
 // ═══ SCREENS 2 & 3: BOXSCORE ═══
 function renderBoxscore(g,side){
   const team=g[side],opp=side==='away'?g.home:g.away;
-  if(!team.boxscore||!team.boxscore.starters||team.boxscore.starters.length===0){
-    return `<div class="box-header"><span>${team.abbr} ${team.name||''}</span></div><div style="padding:20px;color:var(--text-secondary);text-align:center">Box score not yet available</div>`;
-  }
   const cols=['MIN','PTS','FG','3PT','FT','REB','AST','STL','BLK','TO','+/-'];
   const keys=['min','pts','fg','three','ft','reb','ast','stl','blk','to','pm'];
   const allPlayers=[...team.boxscore.starters,...team.boxscore.bench];
@@ -1189,11 +1174,9 @@ function renderBoxscore(g,side){
   }
   // +/-: max value → fewest minutes
   function pickBestPm(){
-    if(allPlayers.length===0)return null;
     const maxVal=Math.max(...allPlayers.map(p=>parseInt(p.pm)||0));
     if(maxVal===0)return null;
     const tied=allPlayers.filter(p=>(parseInt(p.pm)||0)===maxVal);
-    if(tied.length===0)return null;
     return tied.length===1?tied[0]:tied.reduce((best,p)=>getMins(p)<getMins(best)?p:best);
   }
   // Percentage stats: best pct (min attempts) → most makes → fewest minutes
@@ -1358,7 +1341,7 @@ function showTransitionRankings(){
   document.getElementById('miniScores').classList.add('hidden');
   document.getElementById('rankingsMode').classList.add('active');
   // Pick weighted rankings screen
-  rotateRankingsNext();
+  rotateRankingsWeighted();
   transitionRankingsShown++;
   // Schedule next rankings screen
   setTimeout(showTransitionRankings,CONFIG.rankingsRotateInterval);
@@ -1413,7 +1396,7 @@ function startBumperCycle(){
 
 let lastShownGameId=null;
 let rotationCount=0;
-function getGames(){return liveGames!==null?liveGames:MOCK_GAMES;}
+function getGames(){return liveGames&&liveGames.length>0?liveGames:MOCK_GAMES;}
 function pickNextGame(allGames){
   const live=allGames.filter(g=>g.status==='live');
   const finals=allGames.filter(g=>g.status==='final');
@@ -1530,15 +1513,6 @@ function renderFeed(posts){
 }
 
 let currentRankingIndex=0;
-// Format ISO date "2026-02-12" → "February 12, 2026"
-function fmtDate(iso){
-  if(!iso||iso.length<10)return iso||'';
-  const months=['January','February','March','April','May','June','July','August','September','October','November','December'];
-  const[y,m,d]=iso.split('-').map(Number);
-  if(!y||!m||!d)return iso;
-  return `${months[m-1]} ${d}, ${y}`;
-}
-
 function renderRankings(r){
   const p=document.getElementById('rankingsPanel');
   p.style.animation='none';p.offsetHeight;p.style.animation='';
@@ -1570,7 +1544,7 @@ function renderRankings(r){
     const rows=r.data.map(t=>{
       const flagHtml=t.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${t.country}.png" alt="" width="20" height="15">`:'';
       return `<tr>
-        <td class="tx-date">${fmtDate(t.date)}</td>
+        <td class="tx-date">${t.date}</td>
         <td class="tx-team">${t.team}</td>
         <td class="tx-player">${t.player}${flagHtml}</td>
         <td class="tx-notes">${t.notes}</td>
@@ -1917,12 +1891,9 @@ function renderRankings(r){
       const secWinA=sec.scoreA>sec.scoreB?'comp-sec-win':'';
       const secWinB=sec.scoreB>sec.scoreA?'comp-sec-win':'';
       const statsHtml=sec.stats.map(st=>{
-        if(!st)return '';
-        const aVal=st.a!==null&&st.a!==undefined?Math.abs(st.a):0;
-        const bVal=st.b!==null&&st.b!==undefined?Math.abs(st.b):0;
-        const maxV=Math.max(aVal,bVal,0.01);
-        const pctA=st.a!==null&&st.a!==undefined?Math.round((aVal/maxV)*100):0;
-        const pctB=st.b!==null&&st.b!==undefined?Math.round((bVal/maxV)*100):0;
+        const maxV=Math.max(Math.abs(st.a)||0.01,Math.abs(st.b)||0.01);
+        const pctA=Math.round((Math.abs(st.a)/maxV)*100)||0;
+        const pctB=Math.round((Math.abs(st.b)/maxV)*100)||0;
         const clsA=st.winner==='A'?'comp-bar-win':'comp-bar-lose';
         const clsB=st.winner==='B'?'comp-bar-win':'comp-bar-lose';
         const valClsA=st.winner==='A'?' comp-val-win':'';
@@ -2053,7 +2024,7 @@ function renderRankings(r){
           <td class="sal-player">${p.name}${flagHtml}</td>
           <td class="inj-status ${stCls}">${st}</td>
           <td class="inj-detail">${p.injury||''}</td>
-          <td class="inj-date">${fmtDate(p.date)}</td>
+          <td class="inj-date">${p.date||''}</td>
         </tr>`;
       }).join('');
       return `<table class="inj-table"><thead><tr><th class="inj-th-player">PLAYER</th><th class="inj-th-status">STATUS</th><th class="inj-th-detail">INJURY</th><th class="inj-th-date">DATE</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -2069,17 +2040,14 @@ function renderRankings(r){
       // Team header row
       allRows+=`<tr class="dep-team-header"><td colspan="6">${team.name}</td></tr>`;
       for(const level of team.levels){
-        const isOutRow=level.label==='Out';
-        const rowCls=level.label==='Starters'?'dep-row-starters':level.label==='Bench'?'dep-row-bench':isOutRow?'dep-row-out':'dep-row-bench';
+        const rowCls=level.label==='Starters'?'dep-row-starters':level.label==='Bench'?'dep-row-bench':'dep-row-out';
         const cells=posLabels.map(pos=>{
           const p=level.players.find(x=>x.pos===pos);
           if(!p)return `<td class="dep-cell dep-empty">—</td>`;
           const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
-          const qHtml=p.questionable?' <span title="Questionable" style="color:#eab308;">⚠</span>':'';
-          const outHtml=p.out?' <span title="Out" style="color:#ef4444;">✕</span>':'';
-          const nameCls=p.out?'dep-name dep-player-out':p.questionable?'dep-name dep-player-quest':'dep-name';
+          const qHtml=p.questionable?' <span title="Questionable">❓</span>':'';
           return `<td class="dep-cell">
-            <div class="${nameCls}">${p.name}${flagHtml}${qHtml}${outHtml}</div>
+            <div class="dep-name">${p.name}${flagHtml}${qHtml}</div>
             <div class="dep-sal">${p.salary||''}</div>
           </td>`;
         }).join('');
@@ -2090,7 +2058,7 @@ function renderRankings(r){
       <div class="sal-table-wrap"><table class="dep-table">
         <thead><tr><th class="dep-th-level"></th>${posLabels.map(p=>`<th class="dep-th-pos">${p}</th>`).join('')}</tr></thead>
         <tbody>${allRows}</tbody>
-      </table><div class="dep-key"><span style="color:#eab308;">⚠</span> Questionable &nbsp; <span style="color:#ef4444;">✕</span> Out</div></div>`;
+      </table><div class="dep-key">❓ Questionable</div></div>`;
   } else {
     const headerRow=r.columns.map(c=>`<th>${c}</th>`).join('');
     const bodyRows=r.data.map(row=>{
@@ -2130,82 +2098,53 @@ function _showNextGamesPage(){
   container.innerHTML=nextGamesPages.map((pg,pi)=>`<div class="next-games-page${pi===currentNextGamesPage?' active':''}">${pg.map(g=>`<div class="next-game-item"><span class="next-game-teams">${g.away} @ ${g.home}</span><span class="next-game-time">${g.time}</span></div>`).join('')}</div>`).join('');
 }
 function rotateNextGames(){if(nextGamesPages.length<=1)return;currentNextGamesPage=(currentNextGamesPage+1)%nextGamesPages.length;_showNextGamesPage();}
-// ═══ RANKINGS ROTATION ═══
-// Priority weights for section selection
+// ═══ WEIGHTED RANKINGS ROTATION ═══
+// Priority weights: most frequent to least (your priority list)
 const SECTION_WEIGHTS={
   gamePreviews:20, injuries:16, countingStats:13, milestones:11,
   teamRatings:9, depth:7, draftClass:6, matchups:5,
   transactions:4, salaries:3, value:2, histSalaries:1, ratings:8
 };
+let sectionCursors={}; // track position within each section
 
-// Rotation state
-let _rotSection=null;   // current section key (e.g. 'gamePreviews')
-let _rotOffset=0;       // screen index within current section
-
-function _getSectionBounds(sec){
-  const start=sectionStarts[sec];
-  if(start===undefined)return null;
-  // Find the smallest start STRICTLY greater than ours
-  let end=rankingsScreens.length;
-  for(const [k,v] of Object.entries(sectionStarts)){
-    if(k!==sec&&v>start&&v<end) end=v;
+function pickWeightedSection(){
+  // Build available sections (ones that have screens)
+  const available=[];
+  const sectionKeys=Object.keys(sectionStarts);
+  for(const sec of sectionKeys){
+    const start=sectionStarts[sec];
+    // Find end of this section
+    const allStarts=Object.values(sectionStarts).sort((a,b)=>a-b);
+    const myIdx=allStarts.indexOf(start);
+    const end=myIdx<allStarts.length-1?allStarts[myIdx+1]:rankingsScreens.length;
+    const count=end-start;
+    if(count>0) available.push({section:sec,start,count,weight:SECTION_WEIGHTS[sec]||3});
   }
-  return end>start?{start,count:end-start}:null;
-}
-
-function _pickNewSection(){
-  // Weighted random, excluding current section
-  const pool=[];
-  for(const sec of Object.keys(sectionStarts)){
-    const b=_getSectionBounds(sec);
-    if(b&&b.count>0&&sec!==_rotSection) pool.push({section:sec,count:b.count,weight:SECTION_WEIGHTS[sec]||3});
-  }
-  if(pool.length===0){
-    // Only one section — stay in it
-    for(const sec of Object.keys(sectionStarts)){
-      const b=_getSectionBounds(sec);
-      if(b&&b.count>0) pool.push({section:sec,count:b.count,weight:SECTION_WEIGHTS[sec]||3});
-    }
-  }
-  if(pool.length===0)return false;
-  const total=pool.reduce((s,p)=>s+p.weight,0);
-  let r=Math.random()*total;
-  for(const p of pool){
-    r-=p.weight;
+  if(available.length===0)return null;
+  // Weighted random pick
+  const totalWeight=available.reduce((s,a)=>s+a.weight,0);
+  let r=Math.random()*totalWeight;
+  for(const a of available){
+    r-=a.weight;
     if(r<=0){
-      _rotSection=p.section;
-      _rotOffset=0;
-      console.log(`[ROT] → New section: ${p.section} (${p.count} screens)`);
-      return true;
+      // Cycle within this section
+      if(!sectionCursors[a.section])sectionCursors[a.section]=0;
+      const offset=sectionCursors[a.section]%a.count;
+      sectionCursors[a.section]++;
+      return a.start+offset;
     }
   }
-  const p=pool[0];
-  _rotSection=p.section;_rotOffset=0;
-  console.log(`[ROT] → New section: ${p.section} (${p.count} screens)`);
-  return true;
+  return available[0].start;
 }
 
-function rotateRankingsNext(){
+function rotateRankingsWeighted(){
   if(rankingsScreens.length===0)return;
-
-  // Get current section bounds (may have changed after rebuild)
-  let bounds=_rotSection?_getSectionBounds(_rotSection):null;
-  
-  // If section is gone or exhausted → pick new one
-  if(!bounds||_rotOffset>=bounds.count){
-    if(!_pickNewSection())return;
-    bounds=_getSectionBounds(_rotSection);
-    if(!bounds)return;
-  }
-
-  const idx=bounds.start+_rotOffset;
-  if(idx<rankingsScreens.length){
+  const idx=pickWeightedSection();
+  if(idx!==null){
     currentRankingIndex=idx;
     renderRankings(rankingsScreens[idx]);
     updateNavHighlight();
-    console.log(`[ROT] ${_rotSection} screen ${_rotOffset+1}/${bounds.count} (idx ${idx})`);
   }
-  _rotOffset++;
 }
 
 // Legacy sequential rotation (used when user manually browsing)
@@ -2214,72 +2153,13 @@ function rotateRankings(){if(rankingsScreens.length===0)return;currentRankingInd
 let currentMode=null;
 let rankingsRotationTimer=null;
 
-function _ensureRotation(){
-  // Start timer if not running (idempotent — never resets state)
-  if(!rankingsRotationTimer&&rankingsScreens.length>0){
-    rankingsRotationTimer=setInterval(rotateRankingsNext,CONFIG.rankingsRotateInterval);
-    console.log('[ROT] Timer started');
-  }
-}
-
-function _stopRotation(){
-  if(rankingsRotationTimer){clearInterval(rankingsRotationTimer);rankingsRotationTimer=null;}
-}
-
-function _fullResetRotation(){
-  // Full reset: pick new section and restart timer
-  _stopRotation();
-  _rotSection=null;_rotOffset=0;
-  if(rankingsScreens.length>0){
-    rotateRankingsNext(); // show first screen immediately
-    rankingsRotationTimer=setInterval(rotateRankingsNext,CONFIG.rankingsRotateInterval);
-  }
-}
-
-function _updateNextGamesBar(){
-  // Build set of live/final game keys
-  const playedKeys=new Set();
-  if(liveGames&&liveGames.length){
-    for(const g of liveGames){
-      if(g.status==='live'||g.status==='final'){
-        playedKeys.add(g.away.abbr+'@'+g.home.abbr);
-      }
-    }
-  }
-  // Use gamePreviewsData (has tipoff times), filtered to only unplayed games
-  if(gamePreviewsData&&gamePreviewsData.screens&&gamePreviewsData.screens.length>0){
-    const upcoming=gamePreviewsData.screens.filter(s=>{
-      if(s.previewPage&&s.previewPage!==1)return false;
-      if(!s.previewPage)return true; // no page marker
-      const key=s.away.abbr+'@'+s.home.abbr;
-      return !playedKeys.has(key);
-    });
-    if(upcoming.length>0){
-      renderNextGames(upcoming.map(s=>({away:s.away.abbr,home:s.home.abbr,time:(s.dateLabel?s.dateLabel+' ':'')+s.tipoff})));
-      return;
-    }
-  }
-  // Fallback: scheduled games from scores API
-  const allGames=getGames();
-  const scheduled=allGames.filter(g=>g.status==='scheduled');
-  if(scheduled.length>0){
-    renderNextGames(scheduled.map(g=>({away:g.away.abbr,home:g.home.abbr,time:g.clock||'TBD'})));
-  } else {
-    renderNextGames([{away:'—',home:'—',time:'No upcoming games'}]);
-  }
-}
-
 function setMode(mode){
-  // Always update next games bar in rankings mode, even if mode unchanged
-  if(mode==='rankings'||currentMode==='rankings'){
-    _updateNextGamesBar();
-  }
   if(mode===currentMode)return;
   const prev=currentMode;
   currentMode=mode;
   const fg=document.getElementById('featuredGame'),ms=document.getElementById('miniScores'),rm=document.getElementById('rankingsMode'),lb=document.getElementById('liveBadge');
   // Stop any rankings auto-rotation
-  _stopRotation();
+  if(rankingsRotationTimer){clearInterval(rankingsRotationTimer);rankingsRotationTimer=null;}
 
   if(mode==='live'){
     fg.classList.remove('hidden');ms.classList.remove('hidden');
@@ -2301,8 +2181,19 @@ function setMode(mode){
     fg.classList.add('hidden');ms.classList.add('hidden');
     rm.classList.add('active');
     lb.style.display='none';
-    // Start rankings auto-rotation (full reset)
-    _fullResetRotation();
+    const scheduled=getGames().filter(g=>g.status==='scheduled');
+    if(scheduled.length>0){
+      renderNextGames(scheduled.map(g=>({away:g.away.abbr,home:g.home.abbr,time:g.clock||'TBD'})));
+    } else if(gamePreviewsData&&gamePreviewsData.screens&&gamePreviewsData.screens.length>0){
+      renderNextGames(gamePreviewsData.screens.filter(s=>!s.previewPage||s.previewPage===1).map(s=>({away:s.away.abbr,home:s.home.abbr,time:(s.dateLabel?s.dateLabel+' ':'')+s.tipoff})));
+    } else {
+      renderNextGames([{away:'—',home:'—',time:'No upcoming games'}]);
+    }
+    // Start weighted rankings auto-rotation
+    if(rankingsScreens.length>0){
+      rotateRankingsWeighted();
+      rankingsRotationTimer=setInterval(rotateRankingsWeighted,CONFIG.rankingsRotateInterval);
+    }
     console.log('[MODE] → RANKINGS (content only)');
   }
 }
@@ -2318,25 +2209,24 @@ function startTransitionCycle(){
 }
 
 // ═══ THREE-MODE AUTO-DETECTION ═══
-// LIVE: games are actively in progress
-// TRANSITION: games recently ended (was live this session, now final <3h)
-// RANKINGS: no live games, no recent session finals, or all scheduled
-let _sessionSawLive=false; // true if we saw a live game during this browser session
-let _lastLiveSeenAt=null;  // timestamp when last live game was active
+// LIVE: games are live, or all final < 3h ago
+// TRANSITION: all final, 3-6h ago (50% game stats, 50% content)
+// RANKINGS: all final > 6h ago, or no games today
+let lastFinalSeenAt=null;
 function determineAutoMode(games){
   if(!games||games.length===0)return'rankings';
   // Any game currently live → LIVE
-  if(games.some(g=>g.status==='live')){
-    _sessionSawLive=true;
-    _lastLiveSeenAt=Date.now();
-    return'live';
-  }
-  // No live games — check if we SAW live games during this session
-  if(_sessionSawLive&&_lastLiveSeenAt){
-    const hoursSince=(Date.now()-_lastLiveSeenAt)/3600000;
-    if(hoursSince<3)return'live';        // Post-game recap
-    if(hoursSince<6)return'transition';   // Mix of recap + content
-    // Beyond 6h → fall through to rankings
+  if(games.some(g=>g.status==='live')){lastFinalSeenAt=null;return'live';}
+  const finals=games.filter(g=>g.status==='final');
+  if(finals.length>0){
+    const anyPlayed=finals.length>0;
+    if(anyPlayed){
+      if(!lastFinalSeenAt)lastFinalSeenAt=Date.now();
+      const hoursSinceFinal=(Date.now()-lastFinalSeenAt)/3600000;
+      if(hoursSinceFinal<3)return'live';        // Still in LIVE mode post-game
+      if(hoursSinceFinal<6)return'transition';   // TRANSITION: 3-6h after
+      return'rankings';                          // Pure RANKINGS: 6h+
+    }
   }
   return'rankings';
 }
@@ -2391,22 +2281,20 @@ function pollScores(){
     console.log('[API] Scores response:',data.count,'games, hasLive:',data.hasLive);
     if(data.games&&data.games.length>0){
       liveGames=data.games;
-      buildRankingsScreens();
+      buildRankingsScreens(); // Remove previews for started games
+      // Re-render current game (find by lastShownGameId)
       const allGames=getGames();
-      // Determine mode FIRST — before attempting any rendering
+      const current=lastShownGameId?allGames.find(g=>g.id===lastShownGameId):null;
+      const playable=allGames.filter(g=>g.status!=='scheduled');
+      const display=current||playable[0]||allGames[0];
+      if(display){
+        lastShownGameId=display.id;
+        renderGameScreens(display);
+        renderMiniScores(allGames,display.id);
+      }
+      // Update mode: live if any active/final games, rankings if all scheduled or no games
       const mode=determineAutoMode(allGames);
       setMode(mode);
-      // Only render game screens if we're in live/transition mode (games have started)
-      if(mode==='live'||mode==='transition'){
-        const playable=allGames.filter(g=>g.status!=='scheduled');
-        if(playable.length>0){
-          const current=lastShownGameId?playable.find(g=>g.id===lastShownGameId):null;
-          const display=current||playable[0];
-          lastShownGameId=display.id;
-          renderGameScreens(display);
-          renderMiniScores(allGames,display.id);
-        }
-      }
       console.log('[API] Scores rendered:',data.count,'games, mode:',mode);
     }else{
       console.log('[API] No games today — switching to rankings mode');
@@ -2416,19 +2304,33 @@ function pollScores(){
   }).catch(e=>console.warn('[API] Scores poll failed:',e));
 }
 
-// ═══ GLOBAL: Section navigation & highlight ═══
+function init(){
+  lastShownGameId=MOCK_GAMES[0].id;
+  renderGameScreens(MOCK_GAMES[0]);renderMiniScores(MOCK_GAMES,MOCK_GAMES[0].id);
+  // Show mock data immediately as fallback
+  renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);
+  setMode(determineAutoMode(MOCK_GAMES));
+  // Hash-based section navigation: http://localhost:5000/#depth etc.
+  const hashMap={'#previews':'gamePreviews','#milestones':'milestones','#team-ratings':'teamRatings','#stats':'countingStats','#depth':'depth','#injuries':'injuries','#ratings':'ratings','#draft':'draftClass','#transactions':'transactions','#value':'value','#matchups':'matchups','#salaries':'salaries','#history':'histSalaries'};
+  function checkHash(){
+    const h=window.location.hash.toLowerCase();
+    if(hashMap[h]){
+      setTimeout(()=>{setMode('rankings');setTimeout(()=>jumpSection(hashMap[h]),500);},1000);
+    }
+  }
+  checkHash();
+  window.addEventListener('hashchange',()=>{const h=window.location.hash.toLowerCase();if(hashMap[h]){setMode('rankings');setTimeout(()=>jumpSection(hashMap[h]),200);}});
+  scheduleNextScreen();
+  setInterval(rotateNextGames,8000);
+  setInterval(simulateScoreUpdate,5000);
+  setInterval(()=>setMode(determineAutoMode(getGames())),30000);
 function jumpSection(section){
   const idx=sectionStarts[section];
   if(idx!==undefined){
     if(currentMode!=='rankings')setMode('rankings');
-    // Pause auto-rotation while manually browsing
-    _stopRotation();
-    _rotSection=null;_rotOffset=0;
     currentRankingIndex=idx;
     renderRankings(rankingsScreens[idx]);
     updateNavHighlight();
-    // Resume rotation after 30s
-    setTimeout(()=>{if(currentMode==='rankings')_ensureRotation();},30000);
   }
 }
 function updateNavHighlight(){
@@ -2440,15 +2342,12 @@ function updateNavHighlight(){
   }
   btns.forEach(b=>{b.classList.toggle('active',b.dataset.section===current);});
 }
-
-function initKeyboard(){
-  const hashMap={'#previews':'gamePreviews','#milestones':'milestones','#team-ratings':'teamRatings','#stats':'countingStats','#depth':'depth','#injuries':'injuries','#ratings':'ratings','#draft':'draftClass','#transactions':'transactions','#value':'value','#matchups':'matchups','#salaries':'salaries','#history':'histSalaries'};
   document.addEventListener('keydown',e=>{
     if(e.key==='1')setMode('live');
     if(e.key==='2')setMode('rankings');
     // Section jumps (in rankings mode)
     if(currentMode==='rankings'&&rankingsScreens.length>0){
-      const jumpTo=(idx)=>{if(idx!==undefined){_stopRotation();_rotSection=null;_rotOffset=0;currentRankingIndex=idx;renderRankings(rankingsScreens[idx]);updateNavHighlight();setTimeout(()=>{if(currentMode==='rankings')_ensureRotation();},30000);}};
+      const jumpTo=(idx)=>{if(idx!==undefined){currentRankingIndex=idx;renderRankings(rankingsScreens[idx]);updateNavHighlight();}};
       if(e.key==='t'||e.key==='T')jumpTo(sectionStarts.teamRatings);
       if(e.key==='p'||e.key==='P')jumpTo(sectionStarts.gamePreviews);
       if(e.key==='l'||e.key==='L')jumpTo(sectionStarts.milestones);
@@ -2466,9 +2365,6 @@ function initKeyboard(){
       if(e.key==='ArrowLeft'){currentRankingIndex=(currentRankingIndex-1+rankingsScreens.length)%rankingsScreens.length;renderRankings(rankingsScreens[currentRankingIndex]);updateNavHighlight();}
     }
   });
-}
-
-function startPolling(){
   // Start live API polling — fetch immediately, then on interval
   pollBluesky();pollHeadlines();pollScores();
   setInterval(pollBluesky,120000);   // every 2 minutes
@@ -2476,30 +2372,6 @@ function startPolling(){
   setInterval(pollScores,30000);     // every 30 seconds
   // Start ad break bumper cycle
   startBumperCycle();
-}
-
-function init(){
-  // Start in rankings mode — real mode determined by first pollScores
-  renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);
-  setMode('rankings');
-  // Hash-based section navigation
-  const hashMap={'#previews':'gamePreviews','#milestones':'milestones','#team-ratings':'teamRatings','#stats':'countingStats','#depth':'depth','#injuries':'injuries','#ratings':'ratings','#draft':'draftClass','#transactions':'transactions','#value':'value','#matchups':'matchups','#salaries':'salaries','#history':'histSalaries'};
-  const h=window.location.hash.toLowerCase();
-  if(hashMap[h]){setTimeout(()=>{setMode('rankings');setTimeout(()=>jumpSection(hashMap[h]),500);},1000);}
-  window.addEventListener('hashchange',()=>{const h=window.location.hash.toLowerCase();if(hashMap[h]){setMode('rankings');setTimeout(()=>jumpSection(hashMap[h]),200);}});
-  scheduleNextScreen();
-  setInterval(rotateNextGames,8000);
-  setInterval(simulateScoreUpdate,5000);
-  setInterval(()=>setMode(determineAutoMode(getGames())),30000);
-  // Watchdog: restart rotation if stalled in rankings mode
-  setInterval(()=>{
-    if(currentMode==='rankings'&&rankingsScreens.length>0&&!rankingsRotationTimer){
-      console.warn('[WATCHDOG] Rankings rotation stalled — restarting');
-      _ensureRotation();
-    }
-  },15000);
-  initKeyboard();
-  startPolling();
 }
 init();
 </script>

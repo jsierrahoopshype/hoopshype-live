@@ -386,8 +386,6 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .dep-row-out .dep-level{color:#f87171}
 .dep-row-out .dep-name{color:var(--text-tertiary)}
 .dep-name{font-family:var(--font-body);font-weight:500;font-size:13px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dep-player-out{color:#f87171 !important;opacity:0.7}
-.dep-player-quest{color:#eab308 !important}
 .dep-sal{font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary);margin-top:2px}
 .dep-team-header td{font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--text-primary);padding:10px var(--sp-3) 4px;border-bottom:1px solid var(--border-medium);letter-spacing:0.5px;text-transform:uppercase}
 
@@ -501,7 +499,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 </div>
 
 <script>
-const CONFIG={gameRotateInterval:20000,screenDurations:[9000,15000,15000,15000],rankingsRotateInterval:13500,tickerSpeed:50,autoModeHoursAfterLastGame:6,miniScoresVisible:5};
+const CONFIG={gameRotateInterval:20000,screenDurations:[9000,15000,15000,15000],rankingsRotateInterval:15000,tickerSpeed:50,autoModeHoursAfterLastGame:6,miniScoresVisible:5};
 
 const MOCK_GAMES=[
   {id:'1',status:'live',period:'3RD QTR',periodNum:3,clock:'4:32',venue:'TD Garden, Boston',
@@ -604,7 +602,7 @@ function buildRankingsScreens(){
   // Game Preview screens (first — most time-relevant)
   if(gamePreviewsData&&gamePreviewsData.screens){
     sectionStarts.gamePreviews=rankingsScreens.length;
-    // Build set of started/finished game keys to skip from previews
+    // Build set of live/final game keys to skip
     const liveKeys=new Set();
     if(liveGames&&liveGames.length){
       for(const g of liveGames){
@@ -613,7 +611,6 @@ function buildRankingsScreens(){
         }
       }
     }
-    let previewsAdded=0;
     for(const scr of gamePreviewsData.screens){
       const key=scr.away.abbr+'@'+scr.home.abbr;
       if(liveKeys.has(key)) continue; // Skip started games
@@ -624,11 +621,7 @@ function buildRankingsScreens(){
         isGamePreview:true,
         preview:scr
       });
-      previewsAdded++;
     }
-    console.log(`[BUILD] Previews: ${previewsAdded}/${gamePreviewsData.screens.length} added (${liveKeys.size} live/final filtered)`);
-  } else {
-    console.log('[BUILD] No gamePreviewsData yet');
   }
   // Milestones
   if(milestonesData&&milestonesData.screens){
@@ -833,9 +826,6 @@ function buildRankingsScreens(){
       });
     }
   }
-  // Log section summary
-  const secSummary=Object.keys(sectionStarts).map(s=>{const b=_getSectionBounds(s);return `${s}:${b?b.count:0}`;}).join(', ');
-  console.log(`[BUILD] Total: ${rankingsScreens.length} screens — ${secSummary}`);
   // Ensure rotation timer is running (does NOT reset section walk)
   if(currentMode==='rankings'&&rankingsScreens.length>0){
     _ensureRotation();
@@ -946,7 +936,9 @@ function pollGamePreviews(){
       gamePreviewsData=data;
       buildRankingsScreens();
       console.log('Game previews loaded:',data.screens.length,'screens');
-      if(currentMode==='rankings') _updateNextGamesBar();
+      if(currentMode==='rankings'){
+        renderNextGames(data.screens.filter(s=>s.previewPage===1).map(s=>({away:s.away.abbr,home:s.home.abbr,time:(s.dateLabel?s.dateLabel+' ':'')+s.tipoff})));
+      }
     }
   }).catch(e=>console.warn('Game previews fetch error:',e));
 }
@@ -1530,15 +1522,6 @@ function renderFeed(posts){
 }
 
 let currentRankingIndex=0;
-// Format ISO date "2026-02-12" → "February 12, 2026"
-function fmtDate(iso){
-  if(!iso||iso.length<10)return iso||'';
-  const months=['January','February','March','April','May','June','July','August','September','October','November','December'];
-  const[y,m,d]=iso.split('-').map(Number);
-  if(!y||!m||!d)return iso;
-  return `${months[m-1]} ${d}, ${y}`;
-}
-
 function renderRankings(r){
   const p=document.getElementById('rankingsPanel');
   p.style.animation='none';p.offsetHeight;p.style.animation='';
@@ -1570,7 +1553,7 @@ function renderRankings(r){
     const rows=r.data.map(t=>{
       const flagHtml=t.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${t.country}.png" alt="" width="20" height="15">`:'';
       return `<tr>
-        <td class="tx-date">${fmtDate(t.date)}</td>
+        <td class="tx-date">${t.date}</td>
         <td class="tx-team">${t.team}</td>
         <td class="tx-player">${t.player}${flagHtml}</td>
         <td class="tx-notes">${t.notes}</td>
@@ -2053,7 +2036,7 @@ function renderRankings(r){
           <td class="sal-player">${p.name}${flagHtml}</td>
           <td class="inj-status ${stCls}">${st}</td>
           <td class="inj-detail">${p.injury||''}</td>
-          <td class="inj-date">${fmtDate(p.date)}</td>
+          <td class="inj-date">${p.date||''}</td>
         </tr>`;
       }).join('');
       return `<table class="inj-table"><thead><tr><th class="inj-th-player">PLAYER</th><th class="inj-th-status">STATUS</th><th class="inj-th-detail">INJURY</th><th class="inj-th-date">DATE</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -2069,17 +2052,14 @@ function renderRankings(r){
       // Team header row
       allRows+=`<tr class="dep-team-header"><td colspan="6">${team.name}</td></tr>`;
       for(const level of team.levels){
-        const isOutRow=level.label==='Out';
-        const rowCls=level.label==='Starters'?'dep-row-starters':level.label==='Bench'?'dep-row-bench':isOutRow?'dep-row-out':'dep-row-bench';
+        const rowCls=level.label==='Starters'?'dep-row-starters':level.label==='Bench'?'dep-row-bench':'dep-row-out';
         const cells=posLabels.map(pos=>{
           const p=level.players.find(x=>x.pos===pos);
           if(!p)return `<td class="dep-cell dep-empty">—</td>`;
           const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
-          const qHtml=p.questionable?' <span title="Questionable" style="color:#eab308;">⚠</span>':'';
-          const outHtml=p.out?' <span title="Out" style="color:#ef4444;">✕</span>':'';
-          const nameCls=p.out?'dep-name dep-player-out':p.questionable?'dep-name dep-player-quest':'dep-name';
+          const qHtml=p.questionable?' <span title="Questionable">❓</span>':'';
           return `<td class="dep-cell">
-            <div class="${nameCls}">${p.name}${flagHtml}${qHtml}${outHtml}</div>
+            <div class="dep-name">${p.name}${flagHtml}${qHtml}</div>
             <div class="dep-sal">${p.salary||''}</div>
           </td>`;
         }).join('');
@@ -2090,7 +2070,7 @@ function renderRankings(r){
       <div class="sal-table-wrap"><table class="dep-table">
         <thead><tr><th class="dep-th-level"></th>${posLabels.map(p=>`<th class="dep-th-pos">${p}</th>`).join('')}</tr></thead>
         <tbody>${allRows}</tbody>
-      </table><div class="dep-key"><span style="color:#eab308;">⚠</span> Questionable &nbsp; <span style="color:#ef4444;">✕</span> Out</div></div>`;
+      </table><div class="dep-key">❓ Questionable</div></div>`;
   } else {
     const headerRow=r.columns.map(c=>`<th>${c}</th>`).join('');
     const bodyRows=r.data.map(row=>{
@@ -2236,44 +2216,7 @@ function _fullResetRotation(){
   }
 }
 
-function _updateNextGamesBar(){
-  // Build set of live/final game keys
-  const playedKeys=new Set();
-  if(liveGames&&liveGames.length){
-    for(const g of liveGames){
-      if(g.status==='live'||g.status==='final'){
-        playedKeys.add(g.away.abbr+'@'+g.home.abbr);
-      }
-    }
-  }
-  // Use gamePreviewsData (has tipoff times), filtered to only unplayed games
-  if(gamePreviewsData&&gamePreviewsData.screens&&gamePreviewsData.screens.length>0){
-    const upcoming=gamePreviewsData.screens.filter(s=>{
-      if(s.previewPage&&s.previewPage!==1)return false;
-      if(!s.previewPage)return true; // no page marker
-      const key=s.away.abbr+'@'+s.home.abbr;
-      return !playedKeys.has(key);
-    });
-    if(upcoming.length>0){
-      renderNextGames(upcoming.map(s=>({away:s.away.abbr,home:s.home.abbr,time:(s.dateLabel?s.dateLabel+' ':'')+s.tipoff})));
-      return;
-    }
-  }
-  // Fallback: scheduled games from scores API
-  const allGames=getGames();
-  const scheduled=allGames.filter(g=>g.status==='scheduled');
-  if(scheduled.length>0){
-    renderNextGames(scheduled.map(g=>({away:g.away.abbr,home:g.home.abbr,time:g.clock||'TBD'})));
-  } else {
-    renderNextGames([{away:'—',home:'—',time:'No upcoming games'}]);
-  }
-}
-
 function setMode(mode){
-  // Always update next games bar in rankings mode, even if mode unchanged
-  if(mode==='rankings'||currentMode==='rankings'){
-    _updateNextGamesBar();
-  }
   if(mode===currentMode)return;
   const prev=currentMode;
   currentMode=mode;
@@ -2301,6 +2244,14 @@ function setMode(mode){
     fg.classList.add('hidden');ms.classList.add('hidden');
     rm.classList.add('active');
     lb.style.display='none';
+    const scheduled=getGames().filter(g=>g.status==='scheduled');
+    if(scheduled.length>0){
+      renderNextGames(scheduled.map(g=>({away:g.away.abbr,home:g.home.abbr,time:g.clock||'TBD'})));
+    } else if(gamePreviewsData&&gamePreviewsData.screens&&gamePreviewsData.screens.length>0){
+      renderNextGames(gamePreviewsData.screens.filter(s=>!s.previewPage||s.previewPage===1).map(s=>({away:s.away.abbr,home:s.home.abbr,time:(s.dateLabel?s.dateLabel+' ':'')+s.tipoff})));
+    } else {
+      renderNextGames([{away:'—',home:'—',time:'No upcoming games'}]);
+    }
     // Start rankings auto-rotation (full reset)
     _fullResetRotation();
     console.log('[MODE] → RANKINGS (content only)');
@@ -2318,25 +2269,24 @@ function startTransitionCycle(){
 }
 
 // ═══ THREE-MODE AUTO-DETECTION ═══
-// LIVE: games are actively in progress
-// TRANSITION: games recently ended (was live this session, now final <3h)
-// RANKINGS: no live games, no recent session finals, or all scheduled
-let _sessionSawLive=false; // true if we saw a live game during this browser session
-let _lastLiveSeenAt=null;  // timestamp when last live game was active
+// LIVE: games are live, or all final < 3h ago
+// TRANSITION: all final, 3-6h ago (50% game stats, 50% content)
+// RANKINGS: all final > 6h ago, or no games today
+let lastFinalSeenAt=null;
 function determineAutoMode(games){
   if(!games||games.length===0)return'rankings';
   // Any game currently live → LIVE
-  if(games.some(g=>g.status==='live')){
-    _sessionSawLive=true;
-    _lastLiveSeenAt=Date.now();
-    return'live';
-  }
-  // No live games — check if we SAW live games during this session
-  if(_sessionSawLive&&_lastLiveSeenAt){
-    const hoursSince=(Date.now()-_lastLiveSeenAt)/3600000;
-    if(hoursSince<3)return'live';        // Post-game recap
-    if(hoursSince<6)return'transition';   // Mix of recap + content
-    // Beyond 6h → fall through to rankings
+  if(games.some(g=>g.status==='live')){lastFinalSeenAt=null;return'live';}
+  const finals=games.filter(g=>g.status==='final');
+  if(finals.length>0){
+    const anyPlayed=finals.length>0;
+    if(anyPlayed){
+      if(!lastFinalSeenAt)lastFinalSeenAt=Date.now();
+      const hoursSinceFinal=(Date.now()-lastFinalSeenAt)/3600000;
+      if(hoursSinceFinal<3)return'live';        // Still in LIVE mode post-game
+      if(hoursSinceFinal<6)return'transition';   // TRANSITION: 3-6h after
+      return'rankings';                          // Pure RANKINGS: 6h+
+    }
   }
   return'rankings';
 }
@@ -2391,22 +2341,20 @@ function pollScores(){
     console.log('[API] Scores response:',data.count,'games, hasLive:',data.hasLive);
     if(data.games&&data.games.length>0){
       liveGames=data.games;
-      buildRankingsScreens();
+      buildRankingsScreens(); // Remove previews for started games
+      // Re-render current game (find by lastShownGameId)
       const allGames=getGames();
-      // Determine mode FIRST — before attempting any rendering
+      const current=lastShownGameId?allGames.find(g=>g.id===lastShownGameId):null;
+      const playable=allGames.filter(g=>g.status!=='scheduled');
+      const display=current||playable[0]||allGames[0];
+      if(display){
+        lastShownGameId=display.id;
+        renderGameScreens(display);
+        renderMiniScores(allGames,display.id);
+      }
+      // Update mode: live if any active/final games, rankings if all scheduled or no games
       const mode=determineAutoMode(allGames);
       setMode(mode);
-      // Only render game screens if we're in live/transition mode (games have started)
-      if(mode==='live'||mode==='transition'){
-        const playable=allGames.filter(g=>g.status!=='scheduled');
-        if(playable.length>0){
-          const current=lastShownGameId?playable.find(g=>g.id===lastShownGameId):null;
-          const display=current||playable[0];
-          lastShownGameId=display.id;
-          renderGameScreens(display);
-          renderMiniScores(allGames,display.id);
-        }
-      }
       console.log('[API] Scores rendered:',data.count,'games, mode:',mode);
     }else{
       console.log('[API] No games today — switching to rankings mode');
@@ -2479,9 +2427,10 @@ function startPolling(){
 }
 
 function init(){
-  // Start in rankings mode — real mode determined by first pollScores
+  lastShownGameId=MOCK_GAMES[0].id;
+  renderGameScreens(MOCK_GAMES[0]);renderMiniScores(MOCK_GAMES,MOCK_GAMES[0].id);
   renderTicker(MOCK_HEADLINES);renderFeed(MOCK_FEED);
-  setMode('rankings');
+  setMode(determineAutoMode(MOCK_GAMES));
   // Hash-based section navigation
   const hashMap={'#previews':'gamePreviews','#milestones':'milestones','#team-ratings':'teamRatings','#stats':'countingStats','#depth':'depth','#injuries':'injuries','#ratings':'ratings','#draft':'draftClass','#transactions':'transactions','#value':'value','#matchups':'matchups','#salaries':'salaries','#history':'histSalaries'};
   const h=window.location.hash.toLowerCase();

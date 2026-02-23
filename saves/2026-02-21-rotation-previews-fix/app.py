@@ -157,44 +157,6 @@ def team_city(raw):
 
 BLUESKY_MAX_WORKERS = 20  # concurrent threads for fetching feeds
 
-# ---- Profanity filter ----
-_PROFANITY_WORDS = {
-    "fuck", "fucking", "fucked", "fucker", "fuckin", "fck", "fuk",
-    "shit", "shitty", "shitting", "bullshit",
-    "ass", "asshole", "assholes", "dumbass", "badass",
-    "bitch", "bitches", "bitching",
-    "damn", "damned", "goddamn", "goddamnit",
-    "dick", "dicks",
-    "cunt", "cunts",
-    "piss", "pissed", "pissing",
-    "whore", "slut", "hoe",
-    "nigga", "niggas", "nigger",
-    "retard", "retarded",
-    "stfu", "gtfo", "lmfao", "wtf", "af",
-}
-
-def _has_profanity(text):
-    """Check if text contains profanity. Returns True if profane."""
-    words = set(text.lower().split())
-    # Also check for words embedded in punctuation: "fuck!" → "fuck"
-    cleaned = set()
-    for w in words:
-        stripped = w.strip(".,!?;:\"'()[]{}#@*~`—–-…/\\")
-        if stripped:
-            cleaned.add(stripped)
-    return bool(cleaned & _PROFANITY_WORDS)
-
-
-# ---- NBA search queries (rotated each fetch cycle) ----
-_NBA_SEARCH_QUERIES = [
-    "NBA",
-    "NBA trade",
-    "NBA draft",
-    "NBA playoffs",
-    "NBA free agency",
-]
-_search_query_idx = 0
-
 
 def _fetch_one_feed(handle):
     """Fetch recent posts for a single Bluesky handle. Returns list of post dicts."""
@@ -275,182 +237,8 @@ def _fetch_one_feed(handle):
     return posts
 
 
-def _fetch_search_posts(curated_handles):
-    """Fetch NBA posts via Bluesky public search API. Returns list of post dicts.
-    Uses sort=top for engagement-ranked results, filters for quality."""
-    global _search_query_idx
-
-    # Pick 2 queries to run this cycle (rotate through the list)
-    queries_to_run = []
-    for _ in range(2):
-        queries_to_run.append(_NBA_SEARCH_QUERIES[_search_query_idx % len(_NBA_SEARCH_QUERIES)])
-        _search_query_idx += 1
-
-    # Normalize curated handles for dedup (strip leading @)
-    curated_set = set()
-    for h in curated_handles:
-        curated_set.add(h.lower().replace("@", ""))
-
-    all_search = []
-    seen_uris = set()
-
-    for query in queries_to_run:
-        try:
-            url = (
-                f"https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts"
-                f"?q={requests.utils.quote(query)}"
-                f"&sort=top&limit=50&lang=en"
-            )
-            resp = requests.get(url, headers=_HTTP_HEADERS, timeout=10)
-            resp.raise_for_status()
-            posts = resp.json().get("posts", [])
-            log.info(f"Bluesky search '{query}': {len(posts)} results")
-
-            for post in posts:
-                uri = post.get("uri", "")
-                if uri in seen_uris:
-                    continue
-                seen_uris.add(uri)
-
-                author = post.get("author", {})
-                handle = author.get("handle", "")
-                record = post.get("record", {})
-                text = record.get("text", "").strip()
-
-                # --- Quality filters ---
-
-                # Skip curated accounts (they're already in the reporter feed)
-                if handle.lower() in curated_set:
-                    continue
-
-                # Skip replies
-                if record.get("reply"):
-                    continue
-
-                # Engagement: 5+ likes
-                like_count = post.get("likeCount", 0)
-                if like_count < 5:
-                    continue
-
-                # Min length: skip very short posts
-                if len(text) < 40:
-                    continue
-
-                # Profanity filter
-                if _has_profanity(text):
-                    continue
-
-                # Skip posts that are just links with no real text
-                text_no_urls = text
-                for word in text.split():
-                    if word.startswith("http://") or word.startswith("https://"):
-                        text_no_urls = text_no_urls.replace(word, "")
-                if len(text_no_urls.strip()) < 30:
-                    continue
-
-                created = record.get("createdAt", "")
-
-                post_data = {
-                    "author": author.get("displayName", handle),
-                    "handle": f"@{handle}",
-                    "avatar": _initials(author.get("displayName", handle)),
-                    "avatarUrl": author.get("avatar", ""),
-                    "text": text,
-                    "time": _time_ago(created),
-                    "timestamp": created,
-                    "likes": like_count,
-                    "isSearch": True,  # Flag for interleaving
-                }
-
-                # Extract embedded images
-                embed = post.get("embed", {})
-                embed_type = embed.get("$type", "")
-                images = []
-                if "images" in embed_type or "recordWithMedia" in embed_type:
-                    img_list = embed.get("images", [])
-                    if not img_list and "media" in embed:
-                        img_list = embed["media"].get("images", [])
-                    for img in img_list[:2]:
-                        thumb = img.get("thumb", "")
-                        if thumb:
-                            images.append(thumb)
-                if images:
-                    post_data["images"] = images
-
-                # Extract quote posts
-                if "record" in embed_type:
-                    rec = embed.get("record", {})
-                    if "record" in rec:
-                        rec = rec["record"]
-                    q_author = rec.get("author", {})
-                    q_text = rec.get("value", {}).get("text", "") or rec.get("text", "")
-                    if q_text:
-                        post_data["quote"] = {
-                            "author": q_author.get("displayName", ""),
-                            "handle": q_author.get("handle", ""),
-                            "text": q_text[:200],
-                        }
-
-                all_search.append(post_data)
-
-        except Exception as e:
-            log.warning(f"Bluesky search '{query}' failed: {e}")
-
-    # Sort by timestamp (chronological, newest first) — interleave handles ratio
-    all_search.sort(key=lambda p: p.get("timestamp", ""), reverse=True)
-
-    # Cap at 70 search posts
-    all_search = all_search[:70]
-    log.info(f"Bluesky search: {len(all_search)} posts passed quality filters")
-
-    return all_search
-
-
-def _interleave_posts(reporter_posts, search_posts):
-    """Merge all posts chronologically, but cap search posts to 1-per-2 reporter ratio.
-    Walks the merged timeline and skips search posts if we've already hit the ratio."""
-    if not search_posts:
-        return reporter_posts
-    if not reporter_posts:
-        return search_posts
-
-    # Tag and merge
-    for p in reporter_posts:
-        p["_src"] = "r"
-    for p in search_posts:
-        p["_src"] = "s"
-
-    merged = reporter_posts + search_posts
-    merged.sort(key=lambda p: p.get("timestamp", ""), reverse=True)
-
-    # Walk chronologically, enforce ratio: allow 1 search per 2 reporter
-    result = []
-    r_count = 0   # reporter posts emitted since last search post
-    for p in merged:
-        if p["_src"] == "r":
-            result.append(p)
-            r_count += 1
-        else:
-            # Only include search post if we've seen 2+ reporter posts since the last one
-            if r_count >= 2:
-                result.append(p)
-                r_count = 0
-            # else: skip this search post (too many search posts in a row)
-
-    # Clean up internal tag
-    for p in result:
-        p.pop("_src", None)
-    for p in reporter_posts:
-        p.pop("_src", None)
-    for p in search_posts:
-        p.pop("_src", None)
-
-    return result
-
-
 def fetch_bluesky_posts():
-    """Fetch recent posts from configured Bluesky accounts via public API (parallelized),
-    plus NBA search posts interleaved for additional content."""
+    """Fetch recent posts from configured Bluesky accounts via public API (parallelized)."""
     global last_good_bluesky
 
     # Return cached if available
@@ -463,7 +251,7 @@ def fetch_bluesky_posts():
         accounts.append("hoopshypeofficial.bsky.social")
 
     # Exclude specific accounts
-    _BLUESKY_EXCLUDE = {"danwolken.bsky.social", "sportsmediawatch.bsky.social", "shotdrjr.bsky.social"}
+    _BLUESKY_EXCLUDE = {"danwolken.bsky.social", "sportsmediawatch.bsky.social"}
     accounts = [a for a in accounts if a not in _BLUESKY_EXCLUDE]
 
     log.info(f"Fetching Bluesky feeds for {len(accounts)} accounts...")
@@ -491,32 +279,17 @@ def fetch_bluesky_posts():
 
     log.info(f"Bluesky fetch done: {success_count} accounts returned posts, {fail_count} empty/failed")
 
-    # Sort reporter posts by timestamp (newest first)
+    # Sort by timestamp (newest first) — keep all posts for full feed
     all_posts.sort(key=lambda p: p.get("timestamp", ""), reverse=True)
 
-    # Fetch NBA search posts (runs 2 queries, ~70 filtered posts)
-    search_posts = []
-    try:
-        search_posts = _fetch_search_posts(accounts)
-    except Exception as e:
-        log.warning(f"Bluesky search fetch failed: {e}")
-
-    # Interleave: 2 reporter posts, then 1 search post
-    if search_posts:
-        combined = _interleave_posts(all_posts, search_posts)
-        log.info(f"Bluesky combined: {len(all_posts)} reporter + {len(search_posts)} search = {len(combined)} total")
-    else:
-        combined = all_posts
-
-    if combined:
-        last_good_bluesky = combined
-        bluesky_cache["posts"] = combined
-        with_avatar = sum(1 for p in combined if p.get("avatarUrl"))
-        search_count = sum(1 for p in combined if p.get("isSearch"))
+    if all_posts:
+        last_good_bluesky = all_posts
+        bluesky_cache["posts"] = all_posts
+        with_avatar = sum(1 for p in all_posts if p.get("avatarUrl"))
         log.info(
-            f"Cached {len(combined)} Bluesky posts "
-            f"({len(combined) - search_count} reporter, {search_count} search, "
-            f"{with_avatar}/{len(combined)} have profile photos)"
+            f"Cached {len(all_posts)} Bluesky posts "
+            f"({with_avatar}/{len(all_posts)} have profile photos, "
+            f"newest: {all_posts[0].get('author', '?')})"
         )
     else:
         log.warning("No Bluesky posts fetched — check network or API endpoint")
@@ -3269,191 +3042,95 @@ def api_comparisons():
 
 
 # ═══════════════════════════════════════
-# INJURY REPORTS (GitHub JSON + Roster CSV)
+# INJURY REPORTS (Google Sheets)
 # ═══════════════════════════════════════
 
-_INJURIES_JSON_URL = "https://raw.githubusercontent.com/aderoa/Injuries/main/injuries.json"
 _INJURIES_SHEET_ID = "14TQPdQ9mDhHMMMQa5vcs0coL98ZloHORtYElDikKoWY"
 _INJURIES_GID = "306285159"
-_ROSTER_SHEET_ID = "2PACX-1vSg6im6IYB6HXMGzQbmmBnLw9SfQLzxCSo8OfChxlJLhsB6BBCO0wPF_TMch0YgAbtFqYkwDWrsxRe7"
 
 injuries_cache = TTLCache(maxsize=1, ttl=900)  # 15 min
 last_good_injuries = []
 _questionable_players = set()  # Players with Questionable/Doubtful/Game Time Decision status
-_out_players = set()           # Players confirmed Out
-_injury_roster = {}           # player → {team, salary} from roster CSV
-_injury_days_map = {}         # player → days since last game
-
-
-def _fetch_injury_roster():
-    """Fetch roster CSV for team/salary mapping (used by injury screens)."""
-    global _injury_roster
-    if _injury_roster:
-        return _injury_roster
-    url = f"https://docs.google.com/spreadsheets/d/e/{_ROSTER_SHEET_ID}/pub?gid=0&single=true&output=csv"
-    try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        resp.encoding = 'utf-8'
-        reader = list(csv.reader(io.StringIO(resp.text)))
-        if len(reader) < 2:
-            return _injury_roster
-        header = [h.strip().upper() for h in reader[0]]
-        p_idx = next((i for i, h in enumerate(header) if h == "PLAYER"), -1)
-        t_idx = next((i for i, h in enumerate(header) if h == "TEAM"), -1)
-        s_idx = next((i for i, h in enumerate(header) if h == "2026"), -1)
-        if p_idx < 0 or t_idx < 0:
-            log.warning("Injury roster CSV: missing PLAYER or TEAM column")
-            return _injury_roster
-        for row in reader[1:]:
-            if len(row) <= max(p_idx, t_idx):
-                continue
-            player = row[p_idx].strip()
-            team = row[t_idx].strip()
-            sal_raw = row[s_idx].replace("$", "").replace(",", "").strip() if s_idx >= 0 and s_idx < len(row) else "0"
-            salary = int(sal_raw) if sal_raw.isdigit() else 0
-            if player and team:
-                _injury_roster[player] = {"team": team, "salary": salary}
-        log.info(f"Injury roster loaded: {len(_injury_roster)} players")
-    except Exception as e:
-        log.warning(f"Injury roster fetch failed: {e}")
-    return _injury_roster
-
-
-def _fetch_injury_days():
-    """Fetch days-since-last-game from Google Sheet CSV (cols 71/73)."""
-    global _injury_days_map
-    csv_url = (
-        f"https://docs.google.com/spreadsheets/d/{_INJURIES_SHEET_ID}"
-        f"/export?format=csv&gid={_INJURIES_GID}"
-    )
-    try:
-        resp = requests.get(csv_url, timeout=30)
-        resp.raise_for_status()
-        resp.encoding = 'utf-8'
-        reader = list(csv.reader(io.StringIO(resp.text)))
-        _injury_days_map = {}
-        for row in reader[1:]:
-            if len(row) > 73:
-                p = row[71].strip()
-                d = row[73].strip()
-                if p and d.isdigit():
-                    _injury_days_map[p] = int(d)
-        log.info(f"Injury days-since-last-game loaded: {len(_injury_days_map)} players")
-    except Exception as e:
-        log.warning(f"Injury days fetch failed: {e}")
 
 
 def fetch_injuries():
-    """Fetch injury data from GitHub JSON, enriched with roster CSV and days-since-last-game."""
+    """Fetch injury report data from Google Sheet, grouped by team."""
     global last_good_injuries
 
     if "injuries" in injuries_cache:
         return injuries_cache["injuries"]
 
-    # 1. Fetch injuries.json from GitHub
-    log.info(f"Fetching injuries from {_INJURIES_JSON_URL}")
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_INJURIES_SHEET_ID}"
+        f"/export?format=csv&gid={_INJURIES_GID}"
+    )
+    log.info("Fetching injury reports from Google Sheet...")
+
     try:
-        resp = requests.get(_INJURIES_JSON_URL, timeout=15)
+        resp = requests.get(csv_url, timeout=30)
         resp.raise_for_status()
-        entries = resp.json()
+        resp.encoding = 'utf-8'
     except Exception as e:
-        log.warning(f"Injuries JSON fetch failed: {e}")
+        log.warning(f"Injuries fetch failed: {e}")
         return last_good_injuries
 
-    if not entries or not isinstance(entries, list):
-        log.warning("Injuries JSON: empty or invalid format")
+    reader = list(csv.reader(io.StringIO(resp.text)))
+    if len(reader) < 2:
         return last_good_injuries
 
-    log.info(f"Injuries JSON: {len(entries)} entries")
-
-    # 2. Fetch roster for team/salary mapping (cached after first load)
-    roster = _fetch_injury_roster()
-
-    # 3. Fetch days-since-last-game
-    _fetch_injury_days()
-
-    # 4. Derive latest status per player (JSON is chronological, last entry wins)
-    latest = {}
-    for e in entries:
-        player = e.get("player", "").strip()
-        if player:
-            latest[player] = {
-                "status": e.get("status", "Available"),
-                "injury": e.get("injury", ""),
-                "date": e.get("date", ""),
-            }
-
-    # 5. Build team-grouped data — skip Available players
-    teams = {}  # team_name → [players]
-    for player, info in latest.items():
-        status = info["status"]
-        if status == "Available":
+    # Cols 17-23: Team, Player, _, Status, Injury, Date, GameStatus
+    teams = {}  # team -> [players]
+    for row_idx in range(1, len(reader)):
+        row = reader[row_idx]
+        if len(row) < 24:
             continue
 
-        # Team from roster CSV → fallback to _player_team_map → fallback to depth starters
-        r = roster.get(player, {})
-        team = r.get("team", "") or _player_team_map.get(player, "")
-        if not team:
-            # Try normalized name lookup
-            for t_name, starters in _depth_starters.items():
-                for s in starters:
-                    if s.get("name") == player:
-                        team = t_name
-                        break
-                if team:
-                    break
-        if not team:
-            log.debug(f"Injuries: no team found for '{player}', skipping")
-            continue
+        team = row[17].strip()
+        player = row[18].strip()
+        status = row[20].strip()       # Out, Available
+        injury = row[21].strip()       # Injury description
+        date = row[22].strip()         # Date
+        game_status = row[23].strip()  # Out, Questionable, Probable
 
-        # Salary: prefer roster CSV, then _player_salary_map
-        salary_raw = r.get("salary", 0) or _player_salary_raw.get(player, 0)
-        if salary_raw >= 1_000_000:
-            salary_str = f"${salary_raw / 1_000_000:.1f}M"
-        elif salary_raw >= 1_000:
-            salary_str = f"${salary_raw // 1_000}K"
-        elif salary_raw > 0:
-            salary_str = f"${salary_raw:,}"
-        else:
-            salary_str = _player_salary_map.get(player, "")
+        if not team or not player:
+            continue
+        # Skip fully healthy players
+        if not injury and status == "Available" and game_status == "Available":
+            continue
+        # Skip "Available" game status with no injury note
+        if game_status == "Available" and not injury:
+            continue
 
         if team not in teams:
             teams[team] = []
 
         teams[team].append({
             "name": player,
-            "status": status,
-            "injury": info["injury"],
-            "date": info["date"],
-            "salary": salary_str,
+            "status": game_status or status,
+            "injury": injury,
+            "date": date,
+            "salary": _player_salary_map.get(player, ""),
             "country": _PLAYER_COUNTRY.get(player, ""),
-            "days": _injury_days_map.get(player, 0),
         })
 
-    # 6. Update global questionable/out sets for depth chart cross-reference
+    # Build two-column screens: left and right columns, ~15 rows each
+    MAX_PER_COL = 14
+
+    # Update global questionable set for depth chart cross-reference
     _questionable_players.clear()
-    _out_players.clear()
     for team_name, team_players in teams.items():
         for p in team_players:
             st = (p["status"] or "").lower()
-            raw_name = p["name"]
             if st in ("questionable", "doubtful", "game time decision", "day-to-day"):
+                raw_name = p["name"]
                 _questionable_players.add(raw_name)
+                # Also add resolved name for depth chart cross-reference
                 resolved = resolve_player_name(raw_name)
                 if resolved != raw_name:
                     _questionable_players.add(resolved)
-            if st == "out":
-                _out_players.add(raw_name)
-                resolved = resolve_player_name(raw_name)
-                if resolved != raw_name:
-                    _out_players.add(resolved)
     log.info(f"  Questionable/Doubtful players: {len(_questionable_players)} — {list(_questionable_players)[:10]}")
-    log.info(f"  Out players: {len(_out_players)} — {list(_out_players)[:10]}")
 
-    # 7. Build two-column screens
-    MAX_PER_COL = 14
-
+    # First build a flat list of team blocks (header + players)
     team_blocks = []
     for team_name in sorted(teams.keys()):
         team_players = teams[team_name]
@@ -3462,6 +3139,7 @@ def fetch_injuries():
             block.append(p)
         team_blocks.append(block)
 
+    # Pack into columns, then pair columns into screens
     columns = []
     current_col = []
     current_rows = 0
@@ -3476,6 +3154,7 @@ def fetch_injuries():
     if current_col:
         columns.append(current_col)
 
+    # Pair columns into screens (left + right)
     screens = []
     for i in range(0, len(columns), 2):
         left = columns[i]
@@ -3491,8 +3170,8 @@ def fetch_injuries():
         last_good_injuries = screens
         total_injured = sum(1 for b in team_blocks for p in b if not p.get("isHeader"))
         log.info(f"Cached {len(screens)} injury screens ({total_injured} players across {len(teams)} teams)")
+        # Clear preview cache so matchups rebuild with injury-aware lineups
         preview_cache.clear()
-        depth_cache.clear()  # Rebuild depth charts with updated Out/Questionable data
 
     return screens
 
@@ -5199,189 +4878,151 @@ def _background_alltime_retry():
 # DEPTH CHARTS (Google Sheets)
 # ═══════════════════════════════════════
 
-_DEPTH_ORDER_URL = "https://raw.githubusercontent.com/aderoa/DepthCharts/main/order.json"
-_DEPTH_ROSTER_SHEET_ID = "2PACX-1vSg6im6IYB6HXMGzQbmmBnLw9SfQLzxCSo8OfChxlJLhsB6BBCO0wPF_TMch0YgAbtFqYkwDWrsxRe7"
-_DEPTH_ROSTER_GID = "0"
+_DEPTH_SHEET_ID = "14TQPdQ9mDhHMMMQa5vcs0coL98ZloHORtYElDikKoWY"
+_DEPTH_GID = "24771201"
 
 depth_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min
 last_good_depth = []
 
 _POSITIONS = ["PG", "SG", "SF", "PF", "C"]
+_MAX_LEVELS = 10  # effectively unlimited
 _TEAMS_PER_SCREEN = 2
 
-# Abbrev → full city name for depth chart headers
-_ABBREV_TO_CITY = {
-    "ATL": "Atlanta", "BOS": "Boston", "BKN": "Brooklyn", "CHA": "Charlotte",
-    "CHI": "Chicago", "CLE": "Cleveland", "DAL": "Dallas", "DEN": "Denver",
-    "DET": "Detroit", "GSW": "Golden State", "HOU": "Houston", "IND": "Indiana",
-    "LAC": "LA Clippers", "LAL": "LA Lakers", "MEM": "Memphis", "MIA": "Miami",
-    "MIL": "Milwaukee", "MIN": "Minnesota", "NOP": "New Orleans", "NYK": "New York",
-    "OKC": "Oklahoma City", "ORL": "Orlando", "PHI": "Philadelphia", "PHX": "Phoenix",
-    "POR": "Portland", "SAC": "Sacramento", "SAS": "San Antonio", "TOR": "Toronto",
-    "UTA": "Utah", "WAS": "Washington",
-}
+# Teams appear alphabetically in the depth chart sheet
+_NBA_TEAMS_ALPHA = [
+    "Atlanta Hawks", "Boston Celtics", "Brooklyn Nets", "Charlotte Hornets",
+    "Chicago Bulls", "Cleveland Cavaliers", "Dallas Mavericks", "Denver Nuggets",
+    "Detroit Pistons", "Golden State Warriors", "Houston Rockets", "Indiana Pacers",
+    "LA Clippers", "Los Angeles Lakers", "Memphis Grizzlies", "Miami Heat",
+    "Milwaukee Bucks", "Minnesota Timberwolves", "New Orleans Pelicans", "New York Knicks",
+    "Oklahoma City Thunder", "Orlando Magic", "Philadelphia 76ers", "Phoenix Suns",
+    "Portland Trail Blazers", "Sacramento Kings", "San Antonio Spurs", "Toronto Raptors",
+    "Utah Jazz", "Washington Wizards",
+]
 
 
 def fetch_depth():
-    """Fetch depth chart data from GitHub order.json + roster CSV."""
+    """Fetch depth chart data from Google Sheet, packed 3 teams per screen."""
     global last_good_depth
 
     if "depth" in depth_cache:
         return depth_cache["depth"]
 
-    # 1. Fetch order.json from GitHub
-    log.info("Fetching depth chart order from GitHub...")
-    try:
-        resp = requests.get(_DEPTH_ORDER_URL, timeout=15)
-        resp.raise_for_status()
-        order_data = resp.json()  # {"BOS": {"PG": ["name1", ...], ...}, ...}
-    except Exception as e:
-        log.warning(f"Depth chart order.json fetch failed: {e}")
-        return last_good_depth
-
-    if not order_data:
-        log.warning("Depth chart order.json: empty")
-        return last_good_depth
-
-    # 2. Fetch roster CSV for player details (team, salary, position, headshot)
-    roster_url = (
-        f"https://docs.google.com/spreadsheets/d/e/{_DEPTH_ROSTER_SHEET_ID}"
-        f"/pub?gid={_DEPTH_ROSTER_GID}&single=true&output=csv"
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_DEPTH_SHEET_ID}"
+        f"/export?format=csv&gid={_DEPTH_GID}"
     )
-    log.info("Fetching depth chart roster CSV...")
+    log.info("Fetching depth charts from Google Sheet...")
+
     try:
-        resp = requests.get(roster_url, timeout=15)
+        resp = requests.get(csv_url, timeout=30)
         resp.raise_for_status()
         resp.encoding = 'utf-8'
     except Exception as e:
-        log.warning(f"Depth chart roster CSV fetch failed: {e}")
+        log.warning(f"Depth charts fetch failed: {e}")
         return last_good_depth
 
+    import re
     reader = list(csv.reader(io.StringIO(resp.text)))
-    if len(reader) < 2:
-        log.warning("Depth chart roster CSV: too few rows")
+    if len(reader) < 5:
         return last_good_depth
 
-    # Parse roster header
-    header = [h.strip().upper() for h in reader[0]]
-    def col(name):
-        return next((i for i, h in enumerate(header) if h == name), -1)
+    # Find header rows (PG/SG/SF/PF/C) to delimit team blocks
+    header_rows = []
+    pos_set_detect = {"PG", "SG", "SF", "PF", "C"}
+    for ri, row in enumerate(reader):
+        if len(row) >= 5:
+            cols = [row[i].strip() for i in range(5)]
+            if all(c in pos_set_detect for c in cols):
+                header_rows.append(ri)
 
-    PI, TI, SI = col("PLAYER"), col("TEAM"), col("2026")
-    POI, HI = col("POSITION"), col("HEADSHOT")
-    STI = col("ST 25-26")  # Contract status (GUARANTEED, TWO-WAY, 10-DAY)
+    log.info(f"Depth charts: found {len(header_rows)} header rows (salary lookup: {len(_salary_team_lookup)} players, name maps: {len(_full_name_map)} abbrevs, {len(_last_name_map)} last names)")
 
-    if PI < 0 or TI < 0:
-        log.warning("Depth chart roster CSV: missing PLAYER or TEAM column")
-        return last_good_depth
-
-    # Build player lookup
-    player_map = {}  # name → {team, salary, position, headshot, contractStatus}
-    for row in reader[1:]:
-        if len(row) <= max(PI, TI):
-            continue
-        name = row[PI].strip()
-        team = row[TI].strip()
-        if not name or not team:
-            continue
-        sal_raw = row[SI].replace("$", "").replace(",", "").strip() if SI >= 0 and SI < len(row) else "0"
-        salary = int(sal_raw) if sal_raw.isdigit() else 0
-        pos = row[POI].strip() if POI >= 0 and POI < len(row) else "SF"
-        headshot = row[HI].strip() if HI >= 0 and HI < len(row) else ""
-        contract = row[STI].strip() if STI >= 0 and STI < len(row) else "GUARANTEED"
-        player_map[name] = {
-            "team": team, "salary": salary, "position": pos,
-            "headshot": headshot, "contractStatus": contract,
-        }
-
-    log.info(f"Depth chart roster: {len(player_map)} players from CSV")
-
-    # 3. Build depth charts from order.json (row-based)
     all_teams = []
-    for team_abbr in sorted(order_data.keys()):
-        team_order = order_data[team_abbr]
-        city = _ABBREV_TO_CITY.get(team_abbr, team_abbr)
+    pos_set = set(_POSITIONS)  # {"PG", "SG", "SF", "PF", "C"}
+    for hi, hrow in enumerate(header_rows):
+        end = header_rows[hi + 1] if hi + 1 < len(header_rows) else len(reader)
+        # Read actual position labels from this header row (but force standard for display)
+        # Memphis has PF/PF instead of PF/C, but structurally col 5 is always the center
 
-        # For each position, walk the ordered list
-        # __SEPARATOR__ marks transition from active → out/injured
-        active_by_pos = {}   # pos → [player_entry, ...]
-        out_by_pos = {}      # pos → [player_entry, ...]
-        for pos in _POSITIONS:
-            names = team_order.get(pos, [])
-            active_by_pos[pos] = []
-            out_by_pos[pos] = []
-            past_sep = False
-            for name in names:
-                if name == "__SEPARATOR__":
-                    past_sep = True
-                    continue
-                if name == "__SPACER__":
-                    continue
-                info = player_map.get(name, {})
-                if not info:
-                    # Try case-insensitive match
-                    for pn, pi in player_map.items():
-                        if pn.lower() == name.lower():
-                            info = pi
-                            break
-                if not info:
-                    continue
-                sal = info.get("salary", 0) or _player_salary_raw.get(name, 0)
-                sal_str = f"${sal:,}" if sal > 0 else (_player_salary_map.get(name, "") or "")
-
-                is_out = name in _out_players
-                is_quest = name in _questionable_players
-
-                player_entry = {
-                    "pos": pos,
-                    "name": name,
-                    "salary": sal_str,
-                    "country": _PLAYER_COUNTRY.get(name, ""),
-                    "questionable": is_quest,
-                    "out": is_out,
-                }
-
-                # Below separator OR confirmed Out by injury data → out section
-                if past_sep or is_out:
-                    out_by_pos[pos].append(player_entry)
-                else:
-                    active_by_pos[pos].append(player_entry)
-
-        # Build row-based levels
-        max_active = max((len(active_by_pos[pos]) for pos in _POSITIONS), default=0)
-        max_out = max((len(out_by_pos[pos]) for pos in _POSITIONS), default=0)
-
+        # Parse depth levels: pairs of (name_row, salary_row)
         levels = []
-        for row_idx in range(max_active):
-            label = "Starters" if row_idx == 0 else "Bench" if row_idx == 1 else f"Reserve"
-            level = {"label": label, "players": []}
-            for pos in _POSITIONS:
-                if row_idx < len(active_by_pos[pos]):
-                    level["players"].append(active_by_pos[pos][row_idx])
-            if level["players"]:
-                levels.append(level)
+        ri = hrow + 1
+        while ri < end and len(levels) < _MAX_LEVELS:
+            row = reader[ri] if ri < len(reader) else []
+            if len(row) < 5:
+                ri += 1
+                continue
+            cols = [row[i].strip() if i < len(row) else "" for i in range(5)]
+            if not any(cols):
+                ri += 1
+                continue
+            # Detect next team's position header row
+            if all(c in pos_set_detect for c in cols):
+                break
 
-        for row_idx in range(max_out):
-            level = {"label": "Out", "players": []}
-            for pos in _POSITIONS:
-                if row_idx < len(out_by_pos[pos]):
-                    level["players"].append(out_by_pos[pos][row_idx])
-            if level["players"]:
-                levels.append(level)
+            is_salary = any(c.startswith("$") for c in cols if c)
+            if not is_salary and any(cols):
+                names = cols
+                salaries = ["", "", "", "", ""]
+                if ri + 1 < end:
+                    next_row = reader[ri + 1] if ri + 1 < len(reader) else []
+                    next_cols = [next_row[j].strip() if j < len(next_row) else "" for j in range(5)]
+                    if any(c.startswith("$") for c in next_cols if c):
+                        salaries = next_cols
+                        ri += 1
+
+                level_idx = len(levels)
+                label = "Starters" if level_idx == 0 else "Bench" if level_idx == 1 else "Out"
+                level = {"label": label, "players": []}
+                for pi in range(5):
+                    if names[pi]:
+                        full_name = resolve_player_name(names[pi])
+                        level["players"].append({
+                            "pos": _POSITIONS[pi],
+                            "name": full_name,
+                            "salary": salaries[pi],
+                            "country": _PLAYER_COUNTRY.get(full_name, _PLAYER_COUNTRY.get(names[pi], "")),
+                            "questionable": full_name in _questionable_players,
+                        })
+                if level["players"]:
+                    levels.append(level)
+
+            ri += 1
 
         if levels:
-            all_teams.append({"name": city, "levels": levels})
+            # Identify team by looking up player names in salary data
+            team_votes = {}
+            unmatched = []
+            for level in levels:
+                for p in level["players"]:
+                    t = _salary_team_lookup.get(p["name"], "")
+                    if t:
+                        team_votes[t] = team_votes.get(t, 0) + 1
+                    else:
+                        unmatched.append(p["name"])
+            if team_votes:
+                team_name = max(team_votes, key=team_votes.get)
+            else:
+                team_name = f"Unknown Team {hi + 1}"
+            if unmatched:
+                log.info(f"  Block {hi}: {team_name} ({team_votes.get(team_name,0)} votes, unmatched: {unmatched})")
+            else:
+                log.info(f"  Block {hi}: {team_name} ({team_votes.get(team_name,0)} votes, all matched)")
+            all_teams.append({"name": team_name, "levels": levels})
 
-    # Sort teams alphabetically
+    # Sort teams alphabetically for display
     all_teams.sort(key=lambda t: t["name"])
 
-    # 4. Build cross-reference maps for other features
+    # Build player→team cross-reference for team ratings
     _player_team_map.clear()
     _player_position_map.clear()
     _depth_starters.clear()
     _depth_by_pos.clear()
     for t in all_teams:
-        pos_depth = {}
+        if t["name"].startswith("Unknown"):
+            continue  # Don't pollute map with unidentified teams
+        pos_depth = {}  # {"PG": ["player1", "player2"], ...}
         for level in t["levels"]:
             for p in level["players"]:
                 _player_team_map[p["name"]] = t["name"]
@@ -5389,15 +5030,23 @@ def fetch_depth():
                     _player_position_map[p["name"]] = p["pos"]
                 pos_depth.setdefault(p["pos"], []).append(p["name"])
         _depth_by_pos[t["name"]] = pos_depth
+        # Populate starters (first level) — used for tonight's matchup logic
         if t["levels"]:
             starters = t["levels"][0]["players"]
             _depth_starters[t["name"]] = [{"name": p["name"], "pos": p["pos"]} for p in starters]
 
     log.info(f"  Position map: {len(_player_position_map)} players (starters: {sum(len(v) for v in _depth_starters.values())})")
-    team_names = [t["name"] for t in all_teams]
-    log.info(f"Depth charts: {len(all_teams)} teams from order.json: {team_names[:10]}...")
 
-    # 5. Pack into screens
+    # Log all identified teams
+    team_names = [t["name"] for t in all_teams]
+    log.info(f"Depth charts: {len(all_teams)} teams identified: {team_names}")
+    has_memphis = any("emphis" in n for n in team_names)
+    log.info(f"Memphis present: {has_memphis}")
+    if not has_memphis:
+        # Log all vote results for debugging
+        log.warning("Memphis NOT found! Check team votes above.")
+
+    # Pack teams into screens
     screens = []
     for i in range(0, len(all_teams), _TEAMS_PER_SCREEN):
         batch = all_teams[i:i + _TEAMS_PER_SCREEN]
@@ -5418,15 +5067,14 @@ def fetch_depth():
 @app.route("/api/depth")
 def api_depth():
     """Return depth chart screens (multiple teams per screen).
-    Overlays questionable/out flags from current injury data."""
+    Overlays questionable flags from current injury data."""
     data = fetch_depth()
-    # Dynamically apply injury flags from latest data
+    # Dynamically apply questionable flags from latest injury data
     for screen in data:
         for team in screen.get("teams", []):
             for level in team.get("levels", []):
                 for p in level.get("players", []):
                     p["questionable"] = p["name"] in _questionable_players
-                    p["out"] = p["name"] in _out_players
     return jsonify({"screens": data, "count": len(data)})
 
 
@@ -5605,11 +5253,6 @@ def _prewarm_caches():
         log.warning(f"Pre-warm salaries failed: {e}")
 
     try:
-        fetch_injuries()  # Must be before depth — populates _questionable_players, _out_players
-    except Exception as e:
-        log.warning(f"Pre-warm injuries failed: {e}")
-
-    try:
         fetch_depth()  # Must be before ratings/comparisons — populates _player_team_map
     except Exception as e:
         log.warning(f"Pre-warm depth charts failed: {e}")
@@ -5621,6 +5264,11 @@ def _prewarm_caches():
         fetch_ratings()  # Needs _player_team_map for team names
     except Exception as e:
         log.warning(f"Pre-warm ratings failed: {e}")
+
+    try:
+        fetch_injuries()
+    except Exception as e:
+        log.warning(f"Pre-warm injuries failed: {e}")
 
     try:
         fetch_team_ratings()

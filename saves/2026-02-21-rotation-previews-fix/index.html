@@ -386,8 +386,6 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .dep-row-out .dep-level{color:#f87171}
 .dep-row-out .dep-name{color:var(--text-tertiary)}
 .dep-name{font-family:var(--font-body);font-weight:500;font-size:13px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dep-player-out{color:#f87171 !important;opacity:0.7}
-.dep-player-quest{color:#eab308 !important}
 .dep-sal{font-family:var(--font-mono);font-size:11px;color:var(--text-tertiary);margin-top:2px}
 .dep-team-header td{font-family:var(--font-display);font-weight:700;font-size:14px;color:var(--text-primary);padding:10px var(--sp-3) 4px;border-bottom:1px solid var(--border-medium);letter-spacing:0.5px;text-transform:uppercase}
 
@@ -1530,15 +1528,6 @@ function renderFeed(posts){
 }
 
 let currentRankingIndex=0;
-// Format ISO date "2026-02-12" → "February 12, 2026"
-function fmtDate(iso){
-  if(!iso||iso.length<10)return iso||'';
-  const months=['January','February','March','April','May','June','July','August','September','October','November','December'];
-  const[y,m,d]=iso.split('-').map(Number);
-  if(!y||!m||!d)return iso;
-  return `${months[m-1]} ${d}, ${y}`;
-}
-
 function renderRankings(r){
   const p=document.getElementById('rankingsPanel');
   p.style.animation='none';p.offsetHeight;p.style.animation='';
@@ -1570,7 +1559,7 @@ function renderRankings(r){
     const rows=r.data.map(t=>{
       const flagHtml=t.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${t.country}.png" alt="" width="20" height="15">`:'';
       return `<tr>
-        <td class="tx-date">${fmtDate(t.date)}</td>
+        <td class="tx-date">${t.date}</td>
         <td class="tx-team">${t.team}</td>
         <td class="tx-player">${t.player}${flagHtml}</td>
         <td class="tx-notes">${t.notes}</td>
@@ -2053,7 +2042,7 @@ function renderRankings(r){
           <td class="sal-player">${p.name}${flagHtml}</td>
           <td class="inj-status ${stCls}">${st}</td>
           <td class="inj-detail">${p.injury||''}</td>
-          <td class="inj-date">${fmtDate(p.date)}</td>
+          <td class="inj-date">${p.date||''}</td>
         </tr>`;
       }).join('');
       return `<table class="inj-table"><thead><tr><th class="inj-th-player">PLAYER</th><th class="inj-th-status">STATUS</th><th class="inj-th-detail">INJURY</th><th class="inj-th-date">DATE</th></tr></thead><tbody>${rows}</tbody></table>`;
@@ -2069,17 +2058,14 @@ function renderRankings(r){
       // Team header row
       allRows+=`<tr class="dep-team-header"><td colspan="6">${team.name}</td></tr>`;
       for(const level of team.levels){
-        const isOutRow=level.label==='Out';
-        const rowCls=level.label==='Starters'?'dep-row-starters':level.label==='Bench'?'dep-row-bench':isOutRow?'dep-row-out':'dep-row-bench';
+        const rowCls=level.label==='Starters'?'dep-row-starters':level.label==='Bench'?'dep-row-bench':'dep-row-out';
         const cells=posLabels.map(pos=>{
           const p=level.players.find(x=>x.pos===pos);
           if(!p)return `<td class="dep-cell dep-empty">—</td>`;
           const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
-          const qHtml=p.questionable?' <span title="Questionable" style="color:#eab308;">⚠</span>':'';
-          const outHtml=p.out?' <span title="Out" style="color:#ef4444;">✕</span>':'';
-          const nameCls=p.out?'dep-name dep-player-out':p.questionable?'dep-name dep-player-quest':'dep-name';
+          const qHtml=p.questionable?' <span title="Questionable">❓</span>':'';
           return `<td class="dep-cell">
-            <div class="${nameCls}">${p.name}${flagHtml}${qHtml}${outHtml}</div>
+            <div class="dep-name">${p.name}${flagHtml}${qHtml}</div>
             <div class="dep-sal">${p.salary||''}</div>
           </td>`;
         }).join('');
@@ -2090,7 +2076,7 @@ function renderRankings(r){
       <div class="sal-table-wrap"><table class="dep-table">
         <thead><tr><th class="dep-th-level"></th>${posLabels.map(p=>`<th class="dep-th-pos">${p}</th>`).join('')}</tr></thead>
         <tbody>${allRows}</tbody>
-      </table><div class="dep-key"><span style="color:#eab308;">⚠</span> Questionable &nbsp; <span style="color:#ef4444;">✕</span> Out</div></div>`;
+      </table><div class="dep-key">❓ Questionable</div></div>`;
   } else {
     const headerRow=r.columns.map(c=>`<th>${c}</th>`).join('');
     const bodyRows=r.data.map(row=>{

@@ -9,13 +9,11 @@ Phase 3: Google Sheets rankings (TODO)
 
 import csv
 import io
-import json
 import logging
 import os
 import random
 import re
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -57,7 +55,6 @@ _full_name_map = {}       # "L. James" → "LeBron James", etc.
 _player_team_map = {}     # "LeBron James" → "Los Angeles Lakers" (from depth charts)
 _player_position_map = {} # "LeBron James" → "PG" (starters only, from depth charts)
 _depth_starters = {}      # "Boston" → [{"name": "...", "pos": "PG"}, ...]
-_depth_by_pos = {}        # "Boston" → {"PG": ["Jrue Holiday", "Payton Pritchard"], ...}
 _player_full_stats = {}   # "LeBron James" → {"PTS": 25.1, "REB": 7.2, ...} (from NBA leagueleaders)
 _player_adv_stats = {}    # "LeBron James" → {"NET_RATING": 5.2, ...} (from GitHub JSON)
 _salary_team_lookup = {}  # "LeBron James" → "Los Angeles Lakers" (from salary data, for depth ID)
@@ -109,15 +106,6 @@ def resolve_player_name(raw_name):
 # and we call from 20+ concurrent ThreadPoolExecutor workers)
 _HTTP_HEADERS = {"User-Agent": "HoopsHypeLive/1.0"}
 
-def _now_et():
-    """Get current datetime in US Eastern Time (handles DST)."""
-    try:
-        from zoneinfo import ZoneInfo
-        return datetime.now(ZoneInfo("America/New_York"))
-    except Exception:
-        # Fallback: UTC - 5 hours (EST approximation)
-        return datetime.now(timezone.utc) - timedelta(hours=5)
-
 # Team abbreviation → city name mapping
 _TEAM_TO_CITY = {
     "ATL": "Atlanta", "BOS": "Boston", "BKN": "Brooklyn", "CHA": "Charlotte",
@@ -156,44 +144,6 @@ def team_city(raw):
 # ═══════════════════════════════════════
 
 BLUESKY_MAX_WORKERS = 20  # concurrent threads for fetching feeds
-
-# ---- Profanity filter ----
-_PROFANITY_WORDS = {
-    "fuck", "fucking", "fucked", "fucker", "fuckin", "fck", "fuk",
-    "shit", "shitty", "shitting", "bullshit",
-    "ass", "asshole", "assholes", "dumbass", "badass",
-    "bitch", "bitches", "bitching",
-    "damn", "damned", "goddamn", "goddamnit",
-    "dick", "dicks",
-    "cunt", "cunts",
-    "piss", "pissed", "pissing",
-    "whore", "slut", "hoe",
-    "nigga", "niggas", "nigger",
-    "retard", "retarded",
-    "stfu", "gtfo", "lmfao", "wtf", "af",
-}
-
-def _has_profanity(text):
-    """Check if text contains profanity. Returns True if profane."""
-    words = set(text.lower().split())
-    # Also check for words embedded in punctuation: "fuck!" → "fuck"
-    cleaned = set()
-    for w in words:
-        stripped = w.strip(".,!?;:\"'()[]{}#@*~`—–-…/\\")
-        if stripped:
-            cleaned.add(stripped)
-    return bool(cleaned & _PROFANITY_WORDS)
-
-
-# ---- NBA search queries (rotated each fetch cycle) ----
-_NBA_SEARCH_QUERIES = [
-    "NBA",
-    "NBA trade",
-    "NBA draft",
-    "NBA playoffs",
-    "NBA free agency",
-]
-_search_query_idx = 0
 
 
 def _fetch_one_feed(handle):
@@ -275,182 +225,8 @@ def _fetch_one_feed(handle):
     return posts
 
 
-def _fetch_search_posts(curated_handles):
-    """Fetch NBA posts via Bluesky public search API. Returns list of post dicts.
-    Uses sort=top for engagement-ranked results, filters for quality."""
-    global _search_query_idx
-
-    # Pick 2 queries to run this cycle (rotate through the list)
-    queries_to_run = []
-    for _ in range(2):
-        queries_to_run.append(_NBA_SEARCH_QUERIES[_search_query_idx % len(_NBA_SEARCH_QUERIES)])
-        _search_query_idx += 1
-
-    # Normalize curated handles for dedup (strip leading @)
-    curated_set = set()
-    for h in curated_handles:
-        curated_set.add(h.lower().replace("@", ""))
-
-    all_search = []
-    seen_uris = set()
-
-    for query in queries_to_run:
-        try:
-            url = (
-                f"https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts"
-                f"?q={requests.utils.quote(query)}"
-                f"&sort=top&limit=50&lang=en"
-            )
-            resp = requests.get(url, headers=_HTTP_HEADERS, timeout=10)
-            resp.raise_for_status()
-            posts = resp.json().get("posts", [])
-            log.info(f"Bluesky search '{query}': {len(posts)} results")
-
-            for post in posts:
-                uri = post.get("uri", "")
-                if uri in seen_uris:
-                    continue
-                seen_uris.add(uri)
-
-                author = post.get("author", {})
-                handle = author.get("handle", "")
-                record = post.get("record", {})
-                text = record.get("text", "").strip()
-
-                # --- Quality filters ---
-
-                # Skip curated accounts (they're already in the reporter feed)
-                if handle.lower() in curated_set:
-                    continue
-
-                # Skip replies
-                if record.get("reply"):
-                    continue
-
-                # Engagement: 5+ likes
-                like_count = post.get("likeCount", 0)
-                if like_count < 5:
-                    continue
-
-                # Min length: skip very short posts
-                if len(text) < 40:
-                    continue
-
-                # Profanity filter
-                if _has_profanity(text):
-                    continue
-
-                # Skip posts that are just links with no real text
-                text_no_urls = text
-                for word in text.split():
-                    if word.startswith("http://") or word.startswith("https://"):
-                        text_no_urls = text_no_urls.replace(word, "")
-                if len(text_no_urls.strip()) < 30:
-                    continue
-
-                created = record.get("createdAt", "")
-
-                post_data = {
-                    "author": author.get("displayName", handle),
-                    "handle": f"@{handle}",
-                    "avatar": _initials(author.get("displayName", handle)),
-                    "avatarUrl": author.get("avatar", ""),
-                    "text": text,
-                    "time": _time_ago(created),
-                    "timestamp": created,
-                    "likes": like_count,
-                    "isSearch": True,  # Flag for interleaving
-                }
-
-                # Extract embedded images
-                embed = post.get("embed", {})
-                embed_type = embed.get("$type", "")
-                images = []
-                if "images" in embed_type or "recordWithMedia" in embed_type:
-                    img_list = embed.get("images", [])
-                    if not img_list and "media" in embed:
-                        img_list = embed["media"].get("images", [])
-                    for img in img_list[:2]:
-                        thumb = img.get("thumb", "")
-                        if thumb:
-                            images.append(thumb)
-                if images:
-                    post_data["images"] = images
-
-                # Extract quote posts
-                if "record" in embed_type:
-                    rec = embed.get("record", {})
-                    if "record" in rec:
-                        rec = rec["record"]
-                    q_author = rec.get("author", {})
-                    q_text = rec.get("value", {}).get("text", "") or rec.get("text", "")
-                    if q_text:
-                        post_data["quote"] = {
-                            "author": q_author.get("displayName", ""),
-                            "handle": q_author.get("handle", ""),
-                            "text": q_text[:200],
-                        }
-
-                all_search.append(post_data)
-
-        except Exception as e:
-            log.warning(f"Bluesky search '{query}' failed: {e}")
-
-    # Sort by timestamp (chronological, newest first) — interleave handles ratio
-    all_search.sort(key=lambda p: p.get("timestamp", ""), reverse=True)
-
-    # Cap at 70 search posts
-    all_search = all_search[:70]
-    log.info(f"Bluesky search: {len(all_search)} posts passed quality filters")
-
-    return all_search
-
-
-def _interleave_posts(reporter_posts, search_posts):
-    """Merge all posts chronologically, but cap search posts to 1-per-2 reporter ratio.
-    Walks the merged timeline and skips search posts if we've already hit the ratio."""
-    if not search_posts:
-        return reporter_posts
-    if not reporter_posts:
-        return search_posts
-
-    # Tag and merge
-    for p in reporter_posts:
-        p["_src"] = "r"
-    for p in search_posts:
-        p["_src"] = "s"
-
-    merged = reporter_posts + search_posts
-    merged.sort(key=lambda p: p.get("timestamp", ""), reverse=True)
-
-    # Walk chronologically, enforce ratio: allow 1 search per 2 reporter
-    result = []
-    r_count = 0   # reporter posts emitted since last search post
-    for p in merged:
-        if p["_src"] == "r":
-            result.append(p)
-            r_count += 1
-        else:
-            # Only include search post if we've seen 2+ reporter posts since the last one
-            if r_count >= 2:
-                result.append(p)
-                r_count = 0
-            # else: skip this search post (too many search posts in a row)
-
-    # Clean up internal tag
-    for p in result:
-        p.pop("_src", None)
-    for p in reporter_posts:
-        p.pop("_src", None)
-    for p in search_posts:
-        p.pop("_src", None)
-
-    return result
-
-
 def fetch_bluesky_posts():
-    """Fetch recent posts from configured Bluesky accounts via public API (parallelized),
-    plus NBA search posts interleaved for additional content."""
+    """Fetch recent posts from configured Bluesky accounts via public API (parallelized)."""
     global last_good_bluesky
 
     # Return cached if available
@@ -461,10 +237,6 @@ def fetch_bluesky_posts():
     accounts = list(config.BLUESKY_ACCOUNTS)
     if "hoopshypeofficial.bsky.social" not in accounts:
         accounts.append("hoopshypeofficial.bsky.social")
-
-    # Exclude specific accounts
-    _BLUESKY_EXCLUDE = {"danwolken.bsky.social", "sportsmediawatch.bsky.social", "shotdrjr.bsky.social"}
-    accounts = [a for a in accounts if a not in _BLUESKY_EXCLUDE]
 
     log.info(f"Fetching Bluesky feeds for {len(accounts)} accounts...")
 
@@ -491,32 +263,17 @@ def fetch_bluesky_posts():
 
     log.info(f"Bluesky fetch done: {success_count} accounts returned posts, {fail_count} empty/failed")
 
-    # Sort reporter posts by timestamp (newest first)
+    # Sort by timestamp (newest first) — keep all posts for full feed
     all_posts.sort(key=lambda p: p.get("timestamp", ""), reverse=True)
 
-    # Fetch NBA search posts (runs 2 queries, ~70 filtered posts)
-    search_posts = []
-    try:
-        search_posts = _fetch_search_posts(accounts)
-    except Exception as e:
-        log.warning(f"Bluesky search fetch failed: {e}")
-
-    # Interleave: 2 reporter posts, then 1 search post
-    if search_posts:
-        combined = _interleave_posts(all_posts, search_posts)
-        log.info(f"Bluesky combined: {len(all_posts)} reporter + {len(search_posts)} search = {len(combined)} total")
-    else:
-        combined = all_posts
-
-    if combined:
-        last_good_bluesky = combined
-        bluesky_cache["posts"] = combined
-        with_avatar = sum(1 for p in combined if p.get("avatarUrl"))
-        search_count = sum(1 for p in combined if p.get("isSearch"))
+    if all_posts:
+        last_good_bluesky = all_posts
+        bluesky_cache["posts"] = all_posts
+        with_avatar = sum(1 for p in all_posts if p.get("avatarUrl"))
         log.info(
-            f"Cached {len(combined)} Bluesky posts "
-            f"({len(combined) - search_count} reporter, {search_count} search, "
-            f"{with_avatar}/{len(combined)} have profile photos)"
+            f"Cached {len(all_posts)} Bluesky posts "
+            f"({with_avatar}/{len(all_posts)} have profile photos, "
+            f"newest: {all_posts[0].get('author', '?')})"
         )
     else:
         log.warning("No Bluesky posts fetched — check network or API endpoint")
@@ -620,7 +377,7 @@ def fetch_headlines():
                     skipped_old += 1
                     continue
                 diff_mins = (datetime.now(timezone.utc) - parsed_ts).total_seconds() / 60
-                time_display = ""  # timestamps removed from ticker display
+                time_display = f"{int(diff_mins)}m" if diff_mins < 60 else f"{int(diff_mins // 60)}h"
 
         items.append({
             "text": text,
@@ -1143,12 +900,6 @@ def fetch_scores():
         f"(live: {live_count}, final: {final_count}, scheduled: {sched_count}, "
         f"cache TTL: {ttl}s)"
     )
-
-    # Invalidate preview cache when games start — previews should exclude live/final games
-    if live_count > 0 or final_count > 0:
-        if "gp" in preview_cache:
-            preview_cache.clear()
-            log.info("  Preview cache cleared — games have started/ended")
 
     return games
 
@@ -2258,12 +2009,11 @@ def fetch_counting_stats():
         log.info(f"  Per Game: {len(rows_avg)} players, {len(_AVG_CATS)} categories")
 
         # Build full stats cache for comparisons
-        # Use a fresh dict then merge — preserves bridge entries for players not in leaders
         col_map_avg = {h: i for i, h in enumerate(h_avg)}
         player_i = col_map_avg.get("PLAYER", 2)
         team_i = col_map_avg.get("TEAM", 4)
         gp_i = col_map_avg.get("GP", 5)
-        new_stats = {}
+        _player_full_stats.clear()
         stat_keys = ["PTS", "REB", "AST", "STL", "BLK", "FG3M", "TOV", "FG_PCT", "FG3_PCT", "FT_PCT"]
         for row in rows_avg:
             name = _normalize_name(row[player_i])
@@ -2272,10 +2022,8 @@ def fetch_counting_stats():
                 si = col_map_avg.get(sk)
                 if si is not None:
                     d[sk] = row[si]
-            new_stats[name] = d
-        # Overwrite leader entries but keep bridge/supplement entries for missing players
-        _player_full_stats.update(new_stats)
-        log.info(f"  Full stats cache: {len(new_stats)} from leagueleaders (total: {len(_player_full_stats)})")
+            _player_full_stats[name] = d
+        log.info(f"  Full stats cache: {len(_player_full_stats)} players (from leagueleaders)")
 
         # Supplement with ALL players (catches LeBron, Giddey, etc. who don't qualify for leaders)
         try:
@@ -2314,62 +2062,12 @@ def fetch_counting_stats():
         except Exception as e:
             log.warning(f"  Supplementary stats fetch failed: {e}")
 
-        # Supplement 2: leaguedashplayerstats — catches ALL active players (no GP minimum)
-        for _dash_attempt in range(2):
-            try:
-                dash_url = "https://stats.nba.com/stats/leaguedashplayerstats"
-                dash_params = {
-                    "Season": season, "SeasonType": "Regular Season",
-                    "PerMode": "PerGame", "MeasureType": "Base", "LeagueID": "00",
-                }
-                dash_resp = requests.get(dash_url, params=dash_params, headers=_NBA_STATS_HEADERS, timeout=60)
-                dash_resp.raise_for_status()
-                dash_rs = dash_resp.json().get("resultSets", [{}])[0]
-                dash_headers = dash_rs.get("headers", [])
-                dash_rows = dash_rs.get("rowSet", [])
-                dash_col = {h: i for i, h in enumerate(dash_headers)}
-                dash_name_i = dash_col.get("PLAYER_NAME", 1)
-                dash_team_i = dash_col.get("TEAM_ABBREVIATION", 3)
-                dash_gp_i = dash_col.get("GP", 5)
-                dash_supplemented = 0
-                for row in dash_rows:
-                    name = _normalize_name(row[dash_name_i])
-                    if name not in _player_full_stats:
-                        d = {"GP": row[dash_gp_i], "TEAM": row[dash_team_i]}
-                        for sk in stat_keys:
-                            si = dash_col.get(sk)
-                            if si is not None:
-                                d[sk] = row[si]
-                        _player_full_stats[name] = d
-                        dash_supplemented += 1
-                    else:
-                        existing = _player_full_stats[name]
-                        for sk in stat_keys:
-                            if existing.get(sk) is None:
-                                si = dash_col.get(sk)
-                                if si is not None and row[si] is not None:
-                                    existing[sk] = row[si]
-                log.info(f"  Supplemented {dash_supplemented} NEW + patched existing from leaguedashplayerstats (total: {len(_player_full_stats)})")
-                break  # success
-            except Exception as e:
-                if _dash_attempt == 0:
-                    log.warning(f"  leaguedashplayerstats attempt 1 failed: {e} — retrying...")
-                    import time; time.sleep(2)
-                else:
-                    log.warning(f"  leaguedashplayerstats fetch failed after 2 attempts: {e} — will rely on bridge")
-
         # Diagnostic: check LeBron name variants
         lebron_keys = [k for k in _player_full_stats if 'james' in k.lower() or 'lebron' in k.lower()]
         log.info(f"  LeBron variants in stats: {lebron_keys}")
         for lk in lebron_keys:
             d = _player_full_stats[lk]
             log.info(f"    {lk}: STL={d.get('STL')}, BLK={d.get('BLK')}, FG_PCT={d.get('FG_PCT')}, keys={list(d.keys())}")
-
-        # Re-run bridge to fill gaps from team ratings (covers players not in any NBA API)
-        try:
-            _bridge_player_stats()
-        except Exception as e:
-            log.warning(f"  Bridge inside counting_stats failed: {e}")
 
         for stat_key, title, attempts_key, min_attempts in _PCT_CATS:
             stat_i = col_map_avg.get(stat_key)
@@ -2590,12 +2288,6 @@ _POS_COMPAT = {"PG": ["PG", "SG"], "SG": ["SG", "PG", "SF"], "SF": ["SF", "SG", 
                "PF": ["PF", "SF", "C"], "C": ["C", "PF"]}
 
 
-def _ultra_norm(name):
-    """Strip ALL non-alpha chars and lowercase for aggressive matching."""
-    import re
-    return re.sub(r'[^a-z]', '', _normalize_name(name).lower())
-
-
 def _find_stats(name):
     """Find full stats for a player with fuzzy matching."""
     if name in _player_full_stats:
@@ -2622,24 +2314,18 @@ def _find_stats(name):
             kp = k.split()
             if len(kp) >= 2 and kp[-1].lower() == last and kp[0][0].upper() == first_init:
                 return v
-    # Ultra-normalized match
-    ultra = _ultra_norm(name)
-    if ultra:
-        for k, v in _player_full_stats.items():
-            if _ultra_norm(k) == ultra:
-                return v
     # Fallback: build minimal stats from team ratings data (PTS/REB/AST/GP)
     for scr in (last_good_team_ratings or []):
         for p in scr.get("players", []):
-            if p["name"] == name and p.get("pts") not in (None, "", 0):
+            if p["name"] == name and p.get("ratingNum", 0) > 0:
                 d = {"GP": 0}
                 try: d["GP"] = int(p.get("games", 0))
                 except: pass
-                try: d["PTS"] = float(p["pts"])
+                try: d["PTS"] = float(p.get("pts", 0))
                 except: pass
-                try: d["REB"] = float(p["reb"])
+                try: d["REB"] = float(p.get("reb", 0))
                 except: pass
-                try: d["AST"] = float(p["ast"])
+                try: d["AST"] = float(p.get("ast", 0))
                 except: pass
                 return d
     return {}
@@ -2652,9 +2338,11 @@ def _find_adv(name):
     norm = _normalize_name(name)
     if norm in _player_adv_stats:
         return _player_adv_stats[norm]
+    # Try _full_name_map reverse
     for abbr, full in _full_name_map.items():
         if full == name and abbr in _player_adv_stats:
             return _player_adv_stats[abbr]
+    # Case-insensitive scan
     name_lower = ' '.join(name.lower().split())
     for k, v in _player_adv_stats.items():
         if ' '.join(k.lower().split()) == name_lower:
@@ -2666,11 +2354,6 @@ def _find_adv(name):
         for k, v in _player_adv_stats.items():
             kp = k.split()
             if len(kp) >= 2 and kp[-1].lower() == last and kp[0][0].upper() == first_init:
-                return v
-    ultra = _ultra_norm(name)
-    if ultra:
-        for k, v in _player_adv_stats.items():
-            if _ultra_norm(k) == ultra:
                 return v
     return {}
 
@@ -2709,52 +2392,26 @@ def _get_rating(name):
 
 
 def _s(label, va, vb, fmt="1", invert=False):
-    """Build one stat row. Returns None if both values missing (filtered out later)."""
-    if va is None and vb is None:
-        return None
-    va_f = float(va) if va is not None else None
-    vb_f = float(vb) if vb is not None else None
+    """Build one stat row for a comparison card."""
+    va = float(va or 0)
+    vb = float(vb or 0)
     if isinstance(va, str):
-        try: va_f = float(va)
-        except: va_f = None
+        try: va = float(va)
+        except: va = 0.0
     if isinstance(vb, str):
-        try: vb_f = float(vb)
-        except: vb_f = None
-    if va_f is not None and vb_f is not None:
-        if invert:
-            winner = "A" if va_f < vb_f else ("B" if vb_f < va_f else "tie")
-        else:
-            winner = "A" if va_f > vb_f else ("B" if vb_f > va_f else "tie")
-    elif va_f is not None:
-        winner = "B" if invert else "A"
-    elif vb_f is not None:
-        winner = "A" if invert else "B"
+        try: vb = float(vb)
+        except: vb = 0.0
+    if invert:
+        winner = "A" if va < vb else ("B" if vb < va else "tie")
     else:
-        winner = "tie"
-    return {
-        "label": label,
-        "a": round(va_f, 1) if va_f is not None else None,
-        "b": round(vb_f, 1) if vb_f is not None else None,
-        "fmt": fmt, "winner": winner
-    }
+        winner = "A" if va > vb else ("B" if vb > va else "tie")
+    return {"label": label, "a": round(float(va), 1), "b": round(float(vb), 1), "fmt": fmt, "winner": winner}
 
 
 def _build_comparison(name_a, name_b):
-    """Build comprehensive comparison between two players.
-    Returns None if either player is missing key counting stats."""
+    """Build comprehensive comparison between two players."""
     stats_a = _find_stats(name_a)
     stats_b = _find_stats(name_b)
-
-    # Gate: both players must have at least PTS + 2 of (STL, BLK, FG_PCT, FG3_PCT, FT_PCT)
-    _REQUIRED = ["PTS"]
-    _OPTIONAL = ["STL", "BLK", "FG_PCT", "FG3_PCT", "FT_PCT"]
-    for label, name, stats in [("A", name_a, stats_a), ("B", name_b, stats_b)]:
-        has_req = all(stats.get(k) is not None for k in _REQUIRED)
-        opt_count = sum(1 for k in _OPTIONAL if stats.get(k) is not None)
-        if not has_req or opt_count < 2:
-            log.warning(f"  Comparison SKIPPED: {name} has insufficient stats (req={has_req}, opt={opt_count}/5)")
-            return None
-
     adv_a = _find_adv(name_a)
     adv_b = _find_adv(name_b)
     rat_a = _get_rating(name_a)
@@ -2779,92 +2436,69 @@ def _build_comparison(name_a, name_b):
     counting.append(_s("Assists", stats_a.get("AST"), stats_b.get("AST")))
     counting.append(_s("Steals", stats_a.get("STL"), stats_b.get("STL")))
     counting.append(_s("Blocks", stats_a.get("BLK"), stats_b.get("BLK")))
-    fg_a = stats_a.get("FG_PCT")
-    fg_b = stats_b.get("FG_PCT")
-    counting.append(_s("FG%", fg_a * 100 if fg_a else None, fg_b * 100 if fg_b else None, "1"))
-    fg3_a = stats_a.get("FG3_PCT")
-    fg3_b = stats_b.get("FG3_PCT")
-    counting.append(_s("3P%", fg3_a * 100 if fg3_a else None, fg3_b * 100 if fg3_b else None, "1"))
-    ft_a = stats_a.get("FT_PCT")
-    ft_b = stats_b.get("FT_PCT")
-    counting.append(_s("FT%", ft_a * 100 if ft_a else None, ft_b * 100 if ft_b else None, "1"))
+    fg_a = (stats_a.get("FG_PCT") or 0) * 100 if stats_a.get("FG_PCT") else 0
+    fg_b = (stats_b.get("FG_PCT") or 0) * 100 if stats_b.get("FG_PCT") else 0
+    counting.append(_s("FG%", fg_a, fg_b, "1"))
+    fg3_a = (stats_a.get("FG3_PCT") or 0) * 100 if stats_a.get("FG3_PCT") else 0
+    fg3_b = (stats_b.get("FG3_PCT") or 0) * 100 if stats_b.get("FG3_PCT") else 0
+    counting.append(_s("3P%", fg3_a, fg3_b, "1"))
+    ft_a = (stats_a.get("FT_PCT") or 0) * 100 if stats_a.get("FT_PCT") else 0
+    ft_b = (stats_b.get("FT_PCT") or 0) * 100 if stats_b.get("FT_PCT") else 0
+    counting.append(_s("FT%", ft_a, ft_b, "1"))
     counting.append(_s("Turnovers", stats_a.get("TOV"), stats_b.get("TOV"), "1", invert=True))
-    counting = [c for c in counting if c is not None]
-    if counting:
-        sections.append({"label": "COUNTING STATS", "stats": counting})
+    sections.append({"label": "COUNTING STATS", "stats": counting})
 
     # ADVANCED
     advanced = []
     advanced.append(_s("Rating", rat_a, rat_b, "1"))
-    advanced.append(_s("+/-", adv_a.get("PLUS_MINUS"), adv_b.get("PLUS_MINUS"), "s1"))
     advanced.append(_s("Net Rating", adv_a.get("NET_RATING"), adv_b.get("NET_RATING"), "s1"))
-    advanced = [a for a in advanced if a is not None]
-    if advanced:
-        sections.append({"label": "ADVANCED", "stats": advanced})
+    sections.append({"label": "ADVANCED", "stats": advanced})
 
     # DEFENSE
     defense = []
-    dfg_a = adv_a.get("D_FG_PCT")
-    dfg_b = adv_b.get("D_FG_PCT")
-    xfg_a = adv_a.get("NORMAL_FG_PCT")
-    xfg_b = adv_b.get("NORMAL_FG_PCT")
-    defense.append(_s("Def FG%", dfg_a * 100 if dfg_a else None, dfg_b * 100 if dfg_b else None, "1", invert=True))
-    # Exp FG% — only add if at least one player has a meaningful value
-    xfg_a_val = round(float(xfg_a * 100), 1) if xfg_a else None
-    xfg_b_val = round(float(xfg_b * 100), 1) if xfg_b else None
-    if xfg_a_val is not None or xfg_b_val is not None:
-        defense.append({"label": "Exp FG%", "a": xfg_a_val, "b": xfg_b_val, "fmt": "1", "winner": "tie"})
-    if dfg_a is not None and xfg_a is not None and dfg_b is not None and xfg_b is not None:
-        diff_a = round(float((dfg_a - xfg_a) * 100), 1)
-        diff_b = round(float((dfg_b - xfg_b) * 100), 1)
-        defense.append({"label": "FG +/-", "a": diff_a, "b": diff_b, "fmt": "s1",
-                         "winner": "A" if diff_a < diff_b else ("B" if diff_b < diff_a else "tie")})
-    # Filter None from _s() AND rows where both a&b are None
-    defense = [d for d in defense if d is not None and not (d.get("a") is None and d.get("b") is None)]
-    if defense:
-        sections.append({"label": "DEFENSE", "stats": defense})
+    dfg_a = adv_a.get("D_FG_PCT") or 0
+    dfg_b = adv_b.get("D_FG_PCT") or 0
+    xfg_a = adv_a.get("NORMAL_FG_PCT") or 0
+    xfg_b = adv_b.get("NORMAL_FG_PCT") or 0
+    defense.append(_s("Def FG%", dfg_a * 100 if dfg_a else 0, dfg_b * 100 if dfg_b else 0, "1", invert=True))
+    defense.append({"label": "Exp FG%", "a": round(float(xfg_a * 100 if xfg_a else 0), 1),
+                     "b": round(float(xfg_b * 100 if xfg_b else 0), 1), "fmt": "1", "winner": "tie"})
+    diff_a = round(float(((dfg_a or 0) - (xfg_a or 0)) * 100), 1)
+    diff_b = round(float(((dfg_b or 0) - (xfg_b or 0)) * 100), 1)
+    defense.append({"label": "FG +/-", "a": diff_a, "b": diff_b, "fmt": "s1",
+                     "winner": "A" if diff_a < diff_b else ("B" if diff_b < diff_a else "tie")})
+    sections.append({"label": "DEFENSE", "stats": defense})
 
     # CLUTCH
     clutch = []
-    cgp_a = adv_a.get("CLUTCH_GP") or 0
-    cgp_b = adv_b.get("CLUTCH_GP") or 0
+    cgp_a = adv_a.get("CLUTCH_GP", 1) or 1
+    cgp_b = adv_b.get("CLUTCH_GP", 1) or 1
     for lbl, key in [("Points", "CLUTCH_PTS"), ("Rebounds", "CLUTCH_REB"),
                       ("Assists", "CLUTCH_AST"), ("Steals", "CLUTCH_STL"), ("Blocks", "CLUTCH_BLK")]:
-        raw_a = adv_a.get(key)
-        raw_b = adv_b.get(key)
-        va = round(float(raw_a / cgp_a), 1) if raw_a is not None and cgp_a > 0 else None
-        vb = round(float(raw_b / cgp_b), 1) if raw_b is not None and cgp_b > 0 else None
-        row = _s(lbl, va, vb)
-        if row is not None:
-            clutch.append(row)
-    if clutch:
-        sections.append({"label": "CLUTCH", "stats": clutch})
+        va = round(float((adv_a.get(key, 0) or 0) / cgp_a), 1)
+        vb = round(float((adv_b.get(key, 0) or 0) / cgp_b), 1)
+        clutch.append(_s(lbl, va, vb))
+    sections.append({"label": "CLUTCH", "stats": clutch})
 
     # HUSTLE
     hustle = []
-    hgp_a = adv_a.get("HUSTLE_GP") or 0
-    hgp_b = adv_b.get("HUSTLE_GP") or 0
+    hgp_a = adv_a.get("HUSTLE_GP", 1) or 1
+    hgp_b = adv_b.get("HUSTLE_GP", 1) or 1
     for lbl, key in [("Contested", "CONTESTED_SHOTS"), ("Deflections", "DEFLECTIONS"),
                       ("Charges", "CHARGES_DRAWN")]:
-        raw_a = adv_a.get(key)
-        raw_b = adv_b.get(key)
-        va = round(float(raw_a / hgp_a), 1) if raw_a is not None and hgp_a > 0 else None
-        vb = round(float(raw_b / hgp_b), 1) if raw_b is not None and hgp_b > 0 else None
-        row = _s(lbl, va, vb, "1")
-        if row is not None:
-            hustle.append(row)
-    if hustle:
-        sections.append({"label": "HUSTLE", "stats": hustle})
+        va = round(float((adv_a.get(key, 0) or 0) / hgp_a), 1)
+        vb = round(float((adv_b.get(key, 0) or 0) / hgp_b), 1)
+        fmt = "1"  # All hustle stats: 1 decimal
+        hustle.append(_s(lbl, va, vb, fmt))
+    sections.append({"label": "HUSTLE", "stats": hustle})
 
     # Score each section
     total_a = total_b = 0
     for sec in sections:
         sa = sb = 0
         for st in sec["stats"]:
-            if st is None:
-                continue
-            if st.get("winner") == "A": sa += 1
-            elif st.get("winner") == "B": sb += 1
+            if st["winner"] == "A": sa += 1
+            elif st["winner"] == "B": sb += 1
         sec["scoreA"] = sa
         sec["scoreB"] = sb
         total_a += sa
@@ -2958,44 +2592,6 @@ def fetch_advanced_stats():
     lebron_adv = [k for k in _player_adv_stats if 'james' in k.lower() or 'lebron' in k.lower()]
     log.info(f"  LeBron variants in adv stats: {lebron_adv}")
 
-    # Invalidate comparisons cache so they rebuild with new advanced data
-    comparisons_cache.clear()
-    log.info("  Comparisons cache cleared — will rebuild with advanced stats")
-
-
-def _bridge_player_stats():
-    """Fill _player_full_stats from team ratings for players still missing."""
-    if not last_good_team_ratings:
-        return 0
-    bridged = 0
-    for scr in last_good_team_ratings:
-        for p in scr.get("players", []):
-            name = p["name"]
-            if not p.get("ratingNum", 0) or p["ratingNum"] <= 0:
-                continue
-            if name in _player_full_stats:
-                continue
-            d = {"GP": 0}
-            try: d["GP"] = int(p.get("games", 0))
-            except: pass
-            try: d["PTS"] = float(p.get("pts", 0))
-            except: pass
-            try: d["REB"] = float(p.get("reb", 0))
-            except: pass
-            try: d["AST"] = float(p.get("ast", 0))
-            except: pass
-            _player_full_stats[name] = d
-            bridged += 1
-    log.info(f"  Bridge: {bridged} players added from team ratings (total: {len(_player_full_stats)})")
-    for check in ["LeBron James", "Giannis Antetokounmpo", "Stephen Curry", "Anthony Davis",
-                   "Tyler Herro", "Domantas Sabonis", "Trae Young", "Franz Wagner"]:
-        st = _player_full_stats.get(check) or _player_full_stats.get(_normalize_name(check)) or {}
-        if st:
-            log.info(f"  BRIDGE CHECK {check}: PTS={st.get('PTS')}, STL={st.get('STL')}, BLK={st.get('BLK')}, GP={st.get('GP')}")
-        else:
-            log.warning(f"  BRIDGE CHECK {check}: NOT FOUND")
-    return bridged
-
 
 def fetch_comparisons():
     """Build comparison screens: All-Star H2H and tonight's matchup previews."""
@@ -3003,11 +2599,6 @@ def fetch_comparisons():
 
     if "comp" in comparisons_cache:
         return comparisons_cache["comp"]
-
-    # Don't build comparisons until advanced stats are loaded
-    if not _player_adv_stats:
-        log.info("  Comparisons: waiting for advanced stats to load...")
-        return last_good_comparisons or {"screens": [], "count": 0}
 
     if not last_good_team_ratings:
         log.warning("Comparisons: team ratings not loaded yet, skipping")
@@ -3032,13 +2623,9 @@ def fetch_comparisons():
         home_abbr = pg.get("home", {}).get("abbr", "")
         away_city = team_city(away_abbr)
         home_city = team_city(home_abbr)
-        # Find starters for these teams (excluding confirmed Out players)
-        away_out = _get_out_names(away_abbr)
-        home_out = _get_out_names(home_abbr)
-        away_starters = [s for s in _depth_starters.get(away_city, [])
-                         if s["name"] not in away_out and _normalize_name(s["name"]) not in away_out]
-        home_starters = [s for s in _depth_starters.get(home_city, [])
-                         if s["name"] not in home_out and _normalize_name(s["name"]) not in home_out]
+        # Find starters for these teams
+        away_starters = _depth_starters.get(away_city, [])
+        home_starters = _depth_starters.get(home_city, [])
         if not away_starters or not home_starters:
             continue
 
@@ -3063,17 +2650,16 @@ def fetch_comparisons():
 
         if best:
             comp = _build_comparison(best[0], best[1])
-            if comp is not None:
-                label = pg.get("label", "") or ""
-                tip = pg.get("tip", "") or pg.get("clock", "") or ""
-                subtitle = (label + " · " + tip).strip(" ·") or "Upcoming"
-                screens.append({
-                    "title": f"{away_city} vs {home_city}",
-                    "subtitle": subtitle,
-                    "isComparison": True,
-                    "isPreview": True,
-                    "comparison": comp,
-                })
+            label = pg.get("label", "") or ""
+            tip = pg.get("tip", "") or pg.get("clock", "") or ""
+            subtitle = (label + " · " + tip).strip(" ·") or "Upcoming"
+            screens.append({
+                "title": f"{away_city} vs {home_city}",
+                "subtitle": subtitle,
+                "isComparison": True,
+                "isPreview": True,
+                "comparison": comp,
+            })
 
     # 2) ALL-STAR HEAD-TO-HEAD — random pairs using static positions
     available = [n for n in _ALL_STARS if _get_rating(n)]
@@ -3081,20 +2667,17 @@ def fetch_comparisons():
     if no_rating:
         log.warning(f"  All-Stars excluded (no rating): {no_rating}")
 
-    # Exclude players with NO counting stats at all
+    # Also exclude players with incomplete counting stats (missing STL/BLK/FG%)
     incomplete = []
     full_available = []
     for n in available:
         st = _find_stats(n)
-        if st.get("PTS") is not None:
+        if st.get("STL") is not None and st.get("BLK") is not None:
             full_available.append(n)
         else:
             incomplete.append(n)
     if incomplete:
-        log.warning(f"  All-Stars excluded (no stats at all): {incomplete}")
-    partial = [n for n in full_available if _find_stats(n).get("STL") is None]
-    if partial:
-        log.info(f"  All-Stars with partial stats (included anyway): {partial}")
+        log.warning(f"  All-Stars excluded (incomplete stats): {incomplete}")
     available = full_available
     log.info(f"  All-Stars available for H2H: {len(available)}/{len(_ALL_STARS)}")
 
@@ -3120,8 +2703,6 @@ def fetch_comparisons():
 
     for a, b in allstar_pairs:
         comp = _build_comparison(a, b)
-        if comp is None:
-            continue
         a_pos = _ALL_STARS.get(a, "")
         b_pos = _ALL_STARS.get(b, "")
         screens.append({
@@ -3159,7 +2740,7 @@ def _extract_broadcasters(bc_data):
 
 
 def _get_upcoming_games():
-    """Fetch today's or next game date from NBA schedule (used when scoreboard has no scheduled games)."""
+    """Fetch next game date from NBA schedule when no games today."""
     try:
         url = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
         log.info(f"Fetching upcoming games from {url}")
@@ -3167,8 +2748,8 @@ def _get_upcoming_games():
         resp.raise_for_status()
         data = resp.json()
         _schedule_cache["data"] = data  # Cache for season series / rest days
-        today_str = _now_et().strftime("%Y-%m-%d")
-        log.info(f"  Schedule JSON loaded, looking for dates from {today_str} onward (ET)")
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        log.info(f"  Schedule JSON loaded, looking for dates after {today_str}")
         dates = data.get("leagueSchedule", {}).get("gameDates", [])
         log.info(f"  Found {len(dates)} game dates in schedule")
         if not dates:
@@ -3206,7 +2787,7 @@ def _get_upcoming_games():
                 # Last resort: just try to extract any 10-char date
                 game_date = raw_date[:10]
 
-            if not game_date or game_date < today_str:
+            if not game_date or game_date <= today_str:
                 continue
             games = []
             for g in gd.get("games", []):
@@ -3269,191 +2850,95 @@ def api_comparisons():
 
 
 # ═══════════════════════════════════════
-# INJURY REPORTS (GitHub JSON + Roster CSV)
+# INJURY REPORTS (Google Sheets)
 # ═══════════════════════════════════════
 
-_INJURIES_JSON_URL = "https://raw.githubusercontent.com/aderoa/Injuries/main/injuries.json"
 _INJURIES_SHEET_ID = "14TQPdQ9mDhHMMMQa5vcs0coL98ZloHORtYElDikKoWY"
 _INJURIES_GID = "306285159"
-_ROSTER_SHEET_ID = "2PACX-1vSg6im6IYB6HXMGzQbmmBnLw9SfQLzxCSo8OfChxlJLhsB6BBCO0wPF_TMch0YgAbtFqYkwDWrsxRe7"
 
 injuries_cache = TTLCache(maxsize=1, ttl=900)  # 15 min
 last_good_injuries = []
 _questionable_players = set()  # Players with Questionable/Doubtful/Game Time Decision status
-_out_players = set()           # Players confirmed Out
-_injury_roster = {}           # player → {team, salary} from roster CSV
-_injury_days_map = {}         # player → days since last game
-
-
-def _fetch_injury_roster():
-    """Fetch roster CSV for team/salary mapping (used by injury screens)."""
-    global _injury_roster
-    if _injury_roster:
-        return _injury_roster
-    url = f"https://docs.google.com/spreadsheets/d/e/{_ROSTER_SHEET_ID}/pub?gid=0&single=true&output=csv"
-    try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        resp.encoding = 'utf-8'
-        reader = list(csv.reader(io.StringIO(resp.text)))
-        if len(reader) < 2:
-            return _injury_roster
-        header = [h.strip().upper() for h in reader[0]]
-        p_idx = next((i for i, h in enumerate(header) if h == "PLAYER"), -1)
-        t_idx = next((i for i, h in enumerate(header) if h == "TEAM"), -1)
-        s_idx = next((i for i, h in enumerate(header) if h == "2026"), -1)
-        if p_idx < 0 or t_idx < 0:
-            log.warning("Injury roster CSV: missing PLAYER or TEAM column")
-            return _injury_roster
-        for row in reader[1:]:
-            if len(row) <= max(p_idx, t_idx):
-                continue
-            player = row[p_idx].strip()
-            team = row[t_idx].strip()
-            sal_raw = row[s_idx].replace("$", "").replace(",", "").strip() if s_idx >= 0 and s_idx < len(row) else "0"
-            salary = int(sal_raw) if sal_raw.isdigit() else 0
-            if player and team:
-                _injury_roster[player] = {"team": team, "salary": salary}
-        log.info(f"Injury roster loaded: {len(_injury_roster)} players")
-    except Exception as e:
-        log.warning(f"Injury roster fetch failed: {e}")
-    return _injury_roster
-
-
-def _fetch_injury_days():
-    """Fetch days-since-last-game from Google Sheet CSV (cols 71/73)."""
-    global _injury_days_map
-    csv_url = (
-        f"https://docs.google.com/spreadsheets/d/{_INJURIES_SHEET_ID}"
-        f"/export?format=csv&gid={_INJURIES_GID}"
-    )
-    try:
-        resp = requests.get(csv_url, timeout=30)
-        resp.raise_for_status()
-        resp.encoding = 'utf-8'
-        reader = list(csv.reader(io.StringIO(resp.text)))
-        _injury_days_map = {}
-        for row in reader[1:]:
-            if len(row) > 73:
-                p = row[71].strip()
-                d = row[73].strip()
-                if p and d.isdigit():
-                    _injury_days_map[p] = int(d)
-        log.info(f"Injury days-since-last-game loaded: {len(_injury_days_map)} players")
-    except Exception as e:
-        log.warning(f"Injury days fetch failed: {e}")
 
 
 def fetch_injuries():
-    """Fetch injury data from GitHub JSON, enriched with roster CSV and days-since-last-game."""
+    """Fetch injury report data from Google Sheet, grouped by team."""
     global last_good_injuries
 
     if "injuries" in injuries_cache:
         return injuries_cache["injuries"]
 
-    # 1. Fetch injuries.json from GitHub
-    log.info(f"Fetching injuries from {_INJURIES_JSON_URL}")
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_INJURIES_SHEET_ID}"
+        f"/export?format=csv&gid={_INJURIES_GID}"
+    )
+    log.info("Fetching injury reports from Google Sheet...")
+
     try:
-        resp = requests.get(_INJURIES_JSON_URL, timeout=15)
+        resp = requests.get(csv_url, timeout=30)
         resp.raise_for_status()
-        entries = resp.json()
+        resp.encoding = 'utf-8'
     except Exception as e:
-        log.warning(f"Injuries JSON fetch failed: {e}")
+        log.warning(f"Injuries fetch failed: {e}")
         return last_good_injuries
 
-    if not entries or not isinstance(entries, list):
-        log.warning("Injuries JSON: empty or invalid format")
+    reader = list(csv.reader(io.StringIO(resp.text)))
+    if len(reader) < 2:
         return last_good_injuries
 
-    log.info(f"Injuries JSON: {len(entries)} entries")
-
-    # 2. Fetch roster for team/salary mapping (cached after first load)
-    roster = _fetch_injury_roster()
-
-    # 3. Fetch days-since-last-game
-    _fetch_injury_days()
-
-    # 4. Derive latest status per player (JSON is chronological, last entry wins)
-    latest = {}
-    for e in entries:
-        player = e.get("player", "").strip()
-        if player:
-            latest[player] = {
-                "status": e.get("status", "Available"),
-                "injury": e.get("injury", ""),
-                "date": e.get("date", ""),
-            }
-
-    # 5. Build team-grouped data — skip Available players
-    teams = {}  # team_name → [players]
-    for player, info in latest.items():
-        status = info["status"]
-        if status == "Available":
+    # Cols 17-23: Team, Player, _, Status, Injury, Date, GameStatus
+    teams = {}  # team -> [players]
+    for row_idx in range(1, len(reader)):
+        row = reader[row_idx]
+        if len(row) < 24:
             continue
 
-        # Team from roster CSV → fallback to _player_team_map → fallback to depth starters
-        r = roster.get(player, {})
-        team = r.get("team", "") or _player_team_map.get(player, "")
-        if not team:
-            # Try normalized name lookup
-            for t_name, starters in _depth_starters.items():
-                for s in starters:
-                    if s.get("name") == player:
-                        team = t_name
-                        break
-                if team:
-                    break
-        if not team:
-            log.debug(f"Injuries: no team found for '{player}', skipping")
-            continue
+        team = row[17].strip()
+        player = row[18].strip()
+        status = row[20].strip()       # Out, Available
+        injury = row[21].strip()       # Injury description
+        date = row[22].strip()         # Date
+        game_status = row[23].strip()  # Out, Questionable, Probable
 
-        # Salary: prefer roster CSV, then _player_salary_map
-        salary_raw = r.get("salary", 0) or _player_salary_raw.get(player, 0)
-        if salary_raw >= 1_000_000:
-            salary_str = f"${salary_raw / 1_000_000:.1f}M"
-        elif salary_raw >= 1_000:
-            salary_str = f"${salary_raw // 1_000}K"
-        elif salary_raw > 0:
-            salary_str = f"${salary_raw:,}"
-        else:
-            salary_str = _player_salary_map.get(player, "")
+        if not team or not player:
+            continue
+        # Skip fully healthy players
+        if not injury and status == "Available" and game_status == "Available":
+            continue
+        # Skip "Available" game status with no injury note
+        if game_status == "Available" and not injury:
+            continue
 
         if team not in teams:
             teams[team] = []
 
         teams[team].append({
             "name": player,
-            "status": status,
-            "injury": info["injury"],
-            "date": info["date"],
-            "salary": salary_str,
+            "status": game_status or status,
+            "injury": injury,
+            "date": date,
+            "salary": _player_salary_map.get(player, ""),
             "country": _PLAYER_COUNTRY.get(player, ""),
-            "days": _injury_days_map.get(player, 0),
         })
 
-    # 6. Update global questionable/out sets for depth chart cross-reference
+    # Build two-column screens: left and right columns, ~15 rows each
+    MAX_PER_COL = 14
+
+    # Update global questionable set for depth chart cross-reference
     _questionable_players.clear()
-    _out_players.clear()
     for team_name, team_players in teams.items():
         for p in team_players:
             st = (p["status"] or "").lower()
-            raw_name = p["name"]
             if st in ("questionable", "doubtful", "game time decision", "day-to-day"):
+                raw_name = p["name"]
                 _questionable_players.add(raw_name)
+                # Also add resolved name for depth chart cross-reference
                 resolved = resolve_player_name(raw_name)
                 if resolved != raw_name:
                     _questionable_players.add(resolved)
-            if st == "out":
-                _out_players.add(raw_name)
-                resolved = resolve_player_name(raw_name)
-                if resolved != raw_name:
-                    _out_players.add(resolved)
     log.info(f"  Questionable/Doubtful players: {len(_questionable_players)} — {list(_questionable_players)[:10]}")
-    log.info(f"  Out players: {len(_out_players)} — {list(_out_players)[:10]}")
 
-    # 7. Build two-column screens
-    MAX_PER_COL = 14
-
+    # First build a flat list of team blocks (header + players)
     team_blocks = []
     for team_name in sorted(teams.keys()):
         team_players = teams[team_name]
@@ -3462,6 +2947,7 @@ def fetch_injuries():
             block.append(p)
         team_blocks.append(block)
 
+    # Pack into columns, then pair columns into screens
     columns = []
     current_col = []
     current_rows = 0
@@ -3476,6 +2962,7 @@ def fetch_injuries():
     if current_col:
         columns.append(current_col)
 
+    # Pair columns into screens (left + right)
     screens = []
     for i in range(0, len(columns), 2):
         left = columns[i]
@@ -3491,8 +2978,6 @@ def fetch_injuries():
         last_good_injuries = screens
         total_injured = sum(1 for b in team_blocks for p in b if not p.get("isHeader"))
         log.info(f"Cached {len(screens)} injury screens ({total_injured} players across {len(teams)} teams)")
-        preview_cache.clear()
-        depth_cache.clear()  # Rebuild depth charts with updated Out/Questionable data
 
     return screens
 
@@ -4221,21 +3706,8 @@ def _get_team_injuries(team_abbr):
     return result
 
 
-def _get_out_names(team_abbr):
-    """Return set of player names confirmed 'Out' for a team."""
-    out = set()
-    injuries = _get_team_injuries(team_abbr)
-    for inj in injuries:
-        if (inj.get("status") or "").lower() == "out":
-            out.add(inj["name"])
-            out.add(_normalize_name(inj["name"]))
-    return out
-
-
 def _build_matchups(away_abbr, home_abbr):
-    """Build position-by-position starter matchups for two teams.
-    Skips players confirmed Out and substitutes the next depth chart player.
-    """
+    """Build position-by-position starter matchups for two teams."""
     away_city = team_city(away_abbr)
     home_city = team_city(home_abbr)
     away_starters = _depth_starters.get(away_city, [])
@@ -4244,32 +3716,17 @@ def _build_matchups(away_abbr, home_abbr):
     if not away_starters or not home_starters:
         return []
 
-    away_out = _get_out_names(away_abbr)
-    home_out = _get_out_names(home_abbr)
-    away_pos_depth = _depth_by_pos.get(away_city, {})
-    home_pos_depth = _depth_by_pos.get(home_city, {})
-
-    def _pick_player(starters, out_names, pos_depth, pos):
-        """Pick first available (non-Out) player at a position."""
-        # First try the starter
-        starter = next((s for s in starters if s["pos"] == pos), None)
-        if starter and starter["name"] not in out_names and _normalize_name(starter["name"]) not in out_names:
-            return starter["name"]
-        # Starter is out — look through depth chart
-        for name in pos_depth.get(pos, []):
-            if name not in out_names and _normalize_name(name) not in out_names:
-                return name
-        return None
-
     matchups = []
     pos_order = ["PG", "SG", "SF", "PF", "C"]
 
     for pos in pos_order:
-        a_name = _pick_player(away_starters, away_out, away_pos_depth, pos)
-        h_name = _pick_player(home_starters, home_out, home_pos_depth, pos)
-        if not a_name or not h_name:
+        away_p = next((s for s in away_starters if s["pos"] == pos), None)
+        home_p = next((s for s in home_starters if s["pos"] == pos), None)
+        if not away_p or not home_p:
             continue
 
+        a_name = away_p["name"]
+        h_name = home_p["name"]
         a_rat = _get_rating(a_name) or 0
         h_rat = _get_rating(h_name) or 0
         a_stats = _find_stats(a_name)
@@ -4305,15 +3762,11 @@ def _get_hot_hand(away_abbr, home_abbr):
 
     for city, abbr in [(away_city, away_abbr), (home_city, home_abbr)]:
         starters = _depth_starters.get(city, [])
-        out_names = _get_out_names(abbr)
         for s in starters:
             name = s["name"]
-            if name in out_names or _normalize_name(name) in out_names:
-                continue
             r7 = _player_rating_7d.get(name)
             rs = _player_rating_season.get(name) or _get_rating(name)
             if r7 and rs and r7 > rs + 2.0:  # At least +2.0 surge
-                st = _find_stats(name)
                 hot.append({
                     "name": name,
                     "team": city,
@@ -4321,9 +3774,6 @@ def _get_hot_hand(away_abbr, home_abbr):
                     "rating7d": round(r7, 1),
                     "ratingSeason": round(rs, 1),
                     "diff": round(r7 - rs, 1),
-                    "pts": round(float(st.get("PTS", 0) or 0), 1),
-                    "reb": round(float(st.get("REB", 0) or 0), 1),
-                    "ast": round(float(st.get("AST", 0) or 0), 1),
                 })
     # Sort by biggest surge
     hot.sort(key=lambda x: x["diff"], reverse=True)
@@ -4347,23 +3797,22 @@ def fetch_game_previews():
     except Exception:
         games = []
 
-    # Only preview SCHEDULED games (not started/finished)
-    # If all today's games are done, look for next day's games
-    preview_games = [g for g in games if g.get("away", {}).get("abbr") and g.get("status") == "scheduled"]
+    # Filter to scheduled games only for previews
+    scheduled = [g for g in games if g.get("status") == "scheduled"]
     upcoming_label = ""
 
-    if not preview_games:
-        # No scheduled games left in scoreboard — get today's/upcoming from full schedule
-        log.info("Game previews: no scheduled games in scoreboard, checking full schedule...")
+    if not scheduled:
+        # No scheduled games today, get next day
+        log.info("Game previews: no scheduled games today, looking for upcoming...")
         upcoming = _get_upcoming_games()
         if upcoming:
-            preview_games = upcoming
+            scheduled = upcoming
             upcoming_label = upcoming[0].get("label", "")
             log.info(f"Game previews: found {len(upcoming)} upcoming games ({upcoming_label})")
         else:
             log.info("Game previews: no upcoming games returned")
 
-    if not preview_games:
+    if not scheduled:
         log.info("Game previews: no upcoming games found")
         return last_good_previews
 
@@ -4378,19 +3827,19 @@ def fetch_game_previews():
 
     # Determine game date for ESPN predictions
     game_date = ""
-    for g in preview_games:
+    for g in scheduled:
         gd = g.get("gameDate", "")
         if gd:
             game_date = gd
             break
     if not game_date:
-        game_date = _now_et().strftime("%Y-%m-%d")
+        game_date = datetime.now().strftime("%Y-%m-%d")
 
     # Fetch ESPN predictions / win probabilities
     predictions = _fetch_espn_predictions(game_date)
 
     screens = []
-    for g in preview_games:
+    for g in scheduled:
         away_abbr = g.get("away", {}).get("abbr", "")
         home_abbr = g.get("home", {}).get("abbr", "")
         if not away_abbr or not home_abbr:
@@ -4449,41 +3898,6 @@ def fetch_game_previews():
         away_injuries = _get_team_injuries(away_abbr)
         home_injuries = _get_team_injuries(home_abbr)
 
-        # Calculate salary of players confirmed Out and attach per-player salary
-        def _lookup_salary_raw(name):
-            """Fuzzy salary lookup matching."""
-            raw = _player_salary_raw.get(name, 0)
-            if raw:
-                return raw
-            raw = _player_salary_raw.get(_normalize_name(name), 0)
-            if raw:
-                return raw
-            # Try full_name_map (abbreviated → full)
-            for abbr, full in _full_name_map.items():
-                if full == name or full == _normalize_name(name):
-                    raw = _player_salary_raw.get(abbr, 0)
-                    if raw:
-                        return raw
-            # Try last name match
-            parts = name.split()
-            if len(parts) >= 2:
-                last = parts[-1]
-                for k, v in _player_salary_raw.items():
-                    if k.split()[-1] == last and k.split()[0][0] == parts[0][0]:
-                        return v
-            return 0
-
-        def _injury_salary_total(injuries):
-            total = 0
-            for inj in injuries:
-                raw = _lookup_salary_raw(inj["name"])
-                inj["salary"] = raw  # attach to each injury entry
-                if (inj.get("status") or "").lower() == "out":
-                    total += raw
-            return total
-        away_out_salary = _injury_salary_total(away_injuries)
-        home_out_salary = _injury_salary_total(home_injuries)
-
         # Hot hand
         hot_hand = _get_hot_hand(away_abbr, home_abbr)
 
@@ -4531,7 +3945,7 @@ def fetch_game_previews():
                 ps = _player_full_stats.get(s["name"], {})
                 if ps:
                     leaders.append({
-                        "name": s["name"],  # Full name
+                        "name": s["name"].split()[-1],  # Last name only
                         "pts": round(float(ps.get("PTS", 0) or 0), 1),
                         "reb": round(float(ps.get("REB", 0) or 0), 1),
                         "ast": round(float(ps.get("AST", 0) or 0), 1),
@@ -4567,7 +3981,6 @@ def fetch_game_previews():
                 "homeRec": away_espn.get("home", "") or away_st.get("home", ""),
                 "roadRec": away_road,
                 "injuries": away_injuries,
-                "outSalary": away_out_salary,
                 "ortg": away_adv.get("ortg", 0),
                 "drtg": away_adv.get("drtg", 0),
                 "netRtg": away_adv.get("netRtg", 0),
@@ -4592,7 +4005,6 @@ def fetch_game_previews():
                 "homeRec": home_home,
                 "roadRec": home_espn.get("road", "") or home_st.get("road", ""),
                 "injuries": home_injuries,
-                "outSalary": home_out_salary,
                 "ortg": home_adv.get("ortg", 0),
                 "drtg": home_adv.get("drtg", 0),
                 "netRtg": home_adv.get("netRtg", 0),
@@ -4640,355 +4052,224 @@ def api_game_previews():
 _CAT_LABELS = {"PTS": "Points", "REB": "Rebounds", "AST": "Assists",
                "STL": "Steals", "BLK": "Blocks", "FG3M": "3-Pointers Made"}
 
-# All-time leaderboards — Google Sheet is primary source
-_alltime_boards = {}  # cat -> [(name, career_total, is_active), ...] sorted desc
+# All-time leaderboards fetched from NBA API (populated at startup)
+_alltime_boards = {}  # cat -> [(name, career_total), ...] sorted desc
 _alltime_cache = TTLCache(maxsize=1, ttl=14400)  # 4 hours
-_ALLTIME_DISK_CACHE = os.path.join(os.path.dirname(__file__), "alltime_leaders_cache.json")
-_ALLTIME_SHEET_ID = "1Q1DgQJipIFWjcnqIX3s4sHkLb2dhS_hjmFOP0mreqgA"
-_ALLTIME_GID = "0"
-
-def _save_boards_to_disk():
-    """Persist all-time boards to JSON file so data survives restarts."""
-    try:
-        data = {}
-        for cat, board in _alltime_boards.items():
-            data[cat] = [[name, total, active] for name, total, active in board]
-        with open(_ALLTIME_DISK_CACHE, "w") as f:
-            json.dump(data, f)
-        log.info(f"All-time leaders saved to disk: {_ALLTIME_DISK_CACHE}")
-    except Exception as e:
-        log.warning(f"Failed to save all-time leaders to disk: {e}")
-
-def _load_boards_from_disk():
-    """Load all-time boards from disk cache. Returns True if successful."""
-    global _alltime_boards
-    try:
-        if not os.path.exists(_ALLTIME_DISK_CACHE):
-            return False
-        age_hours = (time.time() - os.path.getmtime(_ALLTIME_DISK_CACHE)) / 3600
-        if age_hours > 168:  # 7 days
-            log.info(f"Disk cache too old ({age_hours:.0f}h) — will refetch")
-            return False
-        with open(_ALLTIME_DISK_CACHE, "r") as f:
-            data = json.load(f)
-        for cat, entries in data.items():
-            _alltime_boards[cat] = [(e[0], e[1], e[2]) for e in entries]
-        total = sum(len(b) for b in _alltime_boards.values())
-        log.info(f"Loaded all-time leaders from disk ({age_hours:.1f}h old): {total} entries across {len(_alltime_boards)} cats")
-        return total > 500
-    except Exception as e:
-        log.warning(f"Failed to load disk cache: {e}")
-        return False
 
 def _fetch_alltime_leaders():
-    """Fetch all-time leaders. Priority: 1) Google Sheet → 2) Disk cache → 3) Hardcoded fallback"""
+    """Fetch top 250 all-time leaders from stats.nba.com for each category."""
     global _alltime_boards
     if "at" in _alltime_cache:
         return
 
-    # Step 1: Try Google Sheet
-    sheet_ok = _fetch_alltime_from_sheet()
-    if sheet_ok:
-        _save_boards_to_disk()
-    else:
-        # Step 2: Disk cache
-        if _load_boards_from_disk():
-            log.info("Using disk-cached all-time leaders (Google Sheet failed)")
-        else:
-            # Step 3: Hardcoded fallback
-            _load_fallback_boards()
-            log.warning(f"Using HARDCODED fallback — rankings WILL be inaccurate!")
-
-    _alltime_cache["at"] = True
-    for cat in ["PTS", "REB", "AST", "STL", "BLK"]:
-        board = _alltime_boards.get(cat, [])
-        if board:
-            log.info(f"  All-time {cat}: {len(board)} entries, #1={board[0][0]} ({board[0][1]:,})")
-
-def _fetch_alltime_from_sheet():
-    """Fetch all-time leaders from the Milestones Google Sheet.
-    The sheet has a detailed stats table with columns:
-    #, PLAYER, GP, MIN, PTS, FGM, FGA, FG%, 3PM, 3PA, 3P%, FTM, FTA, FT%, OREB, DREB, REB, AST, STL, BLK, ...
-    """
-    global _alltime_boards
-    csv_url = f"https://docs.google.com/spreadsheets/d/{_ALLTIME_SHEET_ID}/export?format=csv&gid={_ALLTIME_GID}"
-    log.info(f"Fetching all-time leaders from Google Sheet...")
-
+    log.info("Fetching all-time leaderboards from NBA API...")
+    url = "https://stats.nba.com/stats/alltimeleadersgrids"
+    params = {
+        "LeagueID": "00",
+        "PerMode": "Totals",
+        "SeasonType": "Regular Season",
+        "TopX": "250",
+    }
+    hdrs = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "x-nba-stats-origin": "stats",
+        "x-nba-stats-token": "true",
+        "Referer": "https://www.nba.com/",
+        "Origin": "https://www.nba.com",
+        "Accept": "application/json",
+    }
     try:
-        resp = requests.get(csv_url, timeout=30)
+        resp = requests.get(url, params=params, headers=hdrs, timeout=30)
         resp.raise_for_status()
-        text = resp.text
-        if not text or len(text) < 500:
-            log.warning("Google Sheet returned empty/short response")
-            return False
+        data = resp.json()
+        result_sets = data.get("resultSets", [])
 
-        reader = csv.reader(io.StringIO(text))
-        all_rows = list(reader)
-        log.info(f"  Sheet has {len(all_rows)} rows, first row has {len(all_rows[0]) if all_rows else 0} cols")
+        # Map result set names to our categories
+        name_map = {
+            "PTSLeaders": "PTS",
+            "ASTLeaders": "AST",
+            "REBLeaders": "REB",
+            "STLLeaders": "STL",
+            "BLKLeaders": "BLK",
+            "FG3MLeaders": "FG3M",
+        }
 
-        # Find the DETAILED stats header row (the one in the right table with PTS, REB, AST, STL, BLK columns)
-        # This table starts around column S (index 18) and has headers like: #, PLAYER, GP, MIN, PTS, ...
-        header_row_idx = None
-        col_offset = None  # column index where the right table starts
-
-        for ri, row in enumerate(all_rows):
-            # Look for a row that has "PLAYER" and "PTS" and "REB" and "AST" and "STL" and "BLK"
-            # in the RIGHT table portion (column S onwards, index 18+)
-            for ci in range(10, len(row)):
-                if row[ci].strip().upper() == "PLAYER":
-                    # Check if subsequent columns have stats headers
-                    remaining = [c.strip().upper() for c in row[ci:ci+25]]
-                    has_pts = "PTS" in remaining
-                    has_reb = "REB" in remaining
-                    has_ast = "AST" in remaining
-                    has_stl = "STL" in remaining
-                    has_blk = "BLK" in remaining
-                    if has_pts and has_reb and has_ast and has_stl and has_blk:
-                        header_row_idx = ri
-                        col_offset = ci
-                        log.info(f"  Found stats header at row {ri}, col offset {ci}")
-                        break
-            if header_row_idx is not None:
-                break
-
-        if header_row_idx is None:
-            log.warning("Could not find stats header row in sheet")
-            return False
-
-        # Map column indices relative to col_offset
-        header = [c.strip().upper() for c in all_rows[header_row_idx][col_offset:col_offset+25]]
-        log.info(f"  Header cols: {header[:22]}")
-
-        def find_col(name):
-            for i, h in enumerate(header):
-                if h == name:
-                    return col_offset + i
-            return None
-
-        c_name = find_col("PLAYER")
-        c_pts = find_col("PTS")
-        c_reb = find_col("REB")
-        c_ast = find_col("AST")
-        c_stl = find_col("STL")
-        c_blk = find_col("BLK")
-        c_3pm = find_col("3PM") or find_col("3:00 PM") or find_col("3P")  # sheets may rename "3PM"
-
-        if not all([c_name, c_pts, c_reb, c_ast, c_stl, c_blk]):
-            log.warning(f"Missing required columns. Found: name={c_name} pts={c_pts} reb={c_reb} ast={c_ast} stl={c_stl} blk={c_blk}")
-            return False
-
-        # Also check for the "3:00 PM" alias that Google Sheets sometimes creates
-        if c_3pm is None:
-            for i, h in enumerate(header):
-                if "3" in h and ("PM" in h or "P" in h.upper()):
-                    c_3pm = col_offset + i
-                    break
-
-        log.info(f"  Column indices: PLAYER={c_name} PTS={c_pts} REB={c_reb} AST={c_ast} STL={c_stl} BLK={c_blk} 3PM={c_3pm}")
-
-        # Parse player rows
-        players = []
-        for ri in range(header_row_idx + 1, len(all_rows)):
-            row = all_rows[ri]
-            if c_name >= len(row):
+        for rs in result_sets:
+            rs_name = rs.get("name", "")
+            cat = name_map.get(rs_name)
+            if not cat:
                 continue
-            name = row[c_name].strip()
-            if not name or name.upper() in ("PLAYER", "TOTAL", "TEAM", ""):
+            headers_list = rs.get("headers", [])
+            rows = rs.get("rowSet", [])
+            if not headers_list or not rows:
                 continue
 
-            def parse_int(col_idx):
-                if col_idx is None or col_idx >= len(row):
-                    return 0
-                val = row[col_idx].strip().replace(",", "").replace("-", "0")
+            # Find relevant column indices
+            try:
+                name_idx = headers_list.index("PLAYER_NAME")
+            except ValueError:
                 try:
-                    return int(float(val))
-                except (ValueError, TypeError):
-                    return 0
+                    name_idx = headers_list.index("PLAYER_FIRST_NAME")
+                except ValueError:
+                    continue
+            try:
+                stat_idx = headers_list.index(cat)
+            except ValueError:
+                # Try alternate names
+                alt_names = {"PTS": "PTS", "REB": "REB", "AST": "AST",
+                             "STL": "STL", "BLK": "BLK", "FG3M": "FG3M"}
+                stat_idx = None
+                for h_i, h_name in enumerate(headers_list):
+                    if cat in h_name:
+                        stat_idx = h_i
+                        break
+                if stat_idx is None:
+                    continue
+            try:
+                is_active_idx = headers_list.index("IS_ACTIVE_FLAG")
+            except ValueError:
+                is_active_idx = None
 
-            pts = parse_int(c_pts)
-            reb = parse_int(c_reb)
-            ast = parse_int(c_ast)
-            stl = parse_int(c_stl)
-            blk = parse_int(c_blk)
-            tpm = parse_int(c_3pm) if c_3pm else 0
-
-            if pts == 0 and reb == 0 and ast == 0:
-                continue  # skip empty rows
-
-            # Detect active status by checking if player has current season stats
-            norm = _normalize_name(name)
-            is_active = norm in _player_full_stats or name in _player_full_stats
-
-            players.append({
-                "name": name, "pts": pts, "reb": reb, "ast": ast,
-                "stl": stl, "blk": blk, "tpm": tpm, "active": is_active,
-            })
-
-        if len(players) < 100:
-            log.warning(f"Only found {len(players)} players in sheet (expected 200+)")
-            return False
-
-        log.info(f"  Parsed {len(players)} players from Google Sheet")
-
-        # Build boards sorted by each stat
-        for cat, key in [("PTS", "pts"), ("REB", "reb"), ("AST", "ast"), ("STL", "stl"), ("BLK", "blk"), ("FG3M", "tpm")]:
-            board = [(p["name"], p[key], p["active"]) for p in players if p[key] > 0]
+            board = []
+            for row in rows:
+                player_name = row[name_idx] if name_idx < len(row) else ""
+                total = int(row[stat_idx]) if stat_idx < len(row) and row[stat_idx] else 0
+                is_active = (row[is_active_idx] == "Y") if is_active_idx is not None and is_active_idx < len(row) else None
+                # Try to build full name if split
+                if "PLAYER_LAST_NAME" in headers_list:
+                    last_idx = headers_list.index("PLAYER_LAST_NAME")
+                    last_name = row[last_idx] if last_idx < len(row) else ""
+                    player_name = f"{player_name} {last_name}".strip()
+                board.append((player_name, total, is_active))
             board.sort(key=lambda x: x[1], reverse=True)
             _alltime_boards[cat] = board
+            log.info(f"  All-time {cat}: {len(board)} entries, #1 = {board[0][0]} ({board[0][1]:,})")
 
-        total = sum(len(b) for b in _alltime_boards.values())
-        log.info(f"  Google Sheet loaded: {total} total entries across {len(_alltime_boards)} categories")
-        return True
+        _alltime_cache["at"] = True
+        log.info(f"All-time leaders loaded: {list(_alltime_boards.keys())}")
 
     except Exception as e:
-        log.warning(f"Failed to fetch all-time leaders from Google Sheet: {e}")
-        return False
+        log.warning(f"Failed to fetch all-time leaders from API: {e}")
 
-
-def _load_fallback_boards():
-    """Load comprehensive hardcoded all-time leaders as baseline."""
-    global _alltime_boards
-    log.info("Loading hardcoded all-time leaders fallback (source: landofbasketball.com / Wikipedia, Feb 2026)")
-    _alltime_boards["PTS"] = [
-        ("LeBron James", 42975, True), ("Kareem Abdul-Jabbar", 38387, False), ("Karl Malone", 36928, False),
-        ("Kobe Bryant", 33643, False), ("Michael Jordan", 32292, False), ("Kevin Durant", 31862, True),
-        ("Dirk Nowitzki", 31560, False), ("Wilt Chamberlain", 31419, False), ("James Harden", 28863, True),
-        ("Shaquille O'Neal", 28596, False), ("Carmelo Anthony", 28289, False), ("Moses Malone", 27409, False),
-        ("Elvin Hayes", 27313, False), ("Russell Westbrook", 27001, True), ("Hakeem Olajuwon", 26946, False),
-        ("Oscar Robertson", 26710, False), ("Dominique Wilkins", 26668, False), ("Tim Duncan", 26496, False),
-        ("Stephen Curry", 26447, True), ("Paul Pierce", 26397, False), ("John Havlicek", 26395, False),
-        ("DeMar DeRozan", 26339, True), ("Kevin Garnett", 26071, False), ("Vince Carter", 25728, False),
-        ("Alex English", 25613, False), ("Reggie Miller", 25279, False), ("Jerry West", 25192, False),
-        ("Patrick Ewing", 24815, False), ("Ray Allen", 24505, False), ("Allen Iverson", 24368, False),
-        ("Charles Barkley", 23757, False), ("Robert Parish", 23334, False), ("Adrian Dantley", 23177, False),
-        ("Dwyane Wade", 23165, False), ("Elgin Baylor", 23149, False), ("Chris Paul", 23058, True),
-        ("Damian Lillard", 22598, True), ("Clyde Drexler", 22195, False), ("Gary Payton", 21813, False),
-        ("Larry Bird", 21791, False), ("Hal Greer", 21586, False), ("Giannis Antetokounmpo", 21377, True),
-        ("Walt Bellamy", 20941, False), ("Pau Gasol", 20894, False), ("Bob Pettit", 20880, False),
-        ("David Robinson", 20790, False), ("George Gervin", 20708, False), ("LaMarcus Aldridge", 20558, False),
-        ("Mitch Richmond", 20497, False), ("Joe Johnson", 20407, False),
-        ("Tom Chambers", 20049, False), ("Antawn Jamison", 20042, False), ("Kyrie Irving", 19600, True),
-        ("Paul George", 19200, True), ("Tony Parker", 19473, False), ("Jamal Crawford", 19419, False),
-        ("Nikola Jokic", 18400, True), ("Jimmy Butler", 17800, True), ("Bradley Beal", 17200, True),
-        ("Devin Booker", 16800, True), ("Jayson Tatum", 16500, True), ("Anthony Davis", 16400, True),
-        ("Donovan Mitchell", 15000, True), ("Karl-Anthony Towns", 15890, True),
-        ("Zach LaVine", 14600, True), ("Jrue Holiday", 14800, True), ("Khris Middleton", 14400, True),
-        ("Brook Lopez", 14300, True), ("Al Horford", 14960, True), ("Mike Conley", 14200, True),
-        ("Shai Gilgeous-Alexander", 13500, True), ("De'Aaron Fox", 12800, True),
-        ("Trae Young", 12400, True), ("Luka Doncic", 12300, True), ("Domantas Sabonis", 12100, True),
-        ("Pascal Siakam", 12000, True), ("Julius Randle", 11800, True), ("Bam Adebayo", 11500, True),
-        ("Andrew Wiggins", 11400, True), ("Fred VanVleet", 9600, True),
-        ("Anthony Edwards", 9800, True), ("Tyrese Maxey", 8500, True),
-    ]
-    _alltime_boards["AST"] = [
-        ("John Stockton", 15806, False), ("Jason Kidd", 12091, False), ("Chris Paul", 11700, True),
-        ("LeBron James", 11500, True), ("Steve Nash", 10335, False), ("Mark Jackson", 10334, False),
-        ("Magic Johnson", 10141, False), ("Russell Westbrook", 10100, True), ("Oscar Robertson", 9887, False),
-        ("Isiah Thomas", 9061, False), ("Gary Payton", 8966, False), ("Andre Miller", 8524, False),
-        ("James Harden", 8200, True), ("Rod Strickland", 7987, False), ("Rajon Rondo", 7584, False),
-        ("Maurice Cheeks", 7392, False), ("Lenny Wilkens", 7211, False), ("Tim Hardaway", 7095, False),
-        ("Tony Parker", 7036, False), ("Damian Lillard", 7200, True), ("Bob Cousy", 6955, False),
-        ("Guy Rodgers", 6917, False), ("Muggsy Bogues", 6726, False), ("Kevin Johnson", 6711, False),
-        ("Kyle Lowry", 6500, True), ("Reggie Theus", 6453, False), ("John Lucas", 6454, False),
-        ("Norm Nixon", 6386, False), ("Clyde Drexler", 6125, False), ("Scottie Pippen", 6135, False),
-        ("Stephen Curry", 6000, True), ("DeMar DeRozan", 5700, True), ("Derek Harper", 5765, False),
-        ("Deron Williams", 5765, False), ("Dwyane Wade", 5701, False), ("Nikola Jokic", 6600, True),
-        ("Chauncey Billups", 5633, False), ("Trae Young", 5600, True), ("John Wall", 5282, False),
-        ("Jrue Holiday", 5400, True), ("Mike Conley", 5600, True),
-        ("Baron Davis", 5044, False), ("Luka Doncic", 4800, True), ("Kyrie Irving", 5000, True),
-        ("Tyrese Haliburton", 3700, True), ("De'Aaron Fox", 4200, True),
-    ]
-    _alltime_boards["REB"] = [
-        ("Wilt Chamberlain", 23924, False), ("Bill Russell", 21620, False), ("Kareem Abdul-Jabbar", 17440, False),
-        ("Elvin Hayes", 16279, False), ("Moses Malone", 16212, False), ("Tim Duncan", 15091, False),
-        ("Karl Malone", 14968, False), ("Robert Parish", 14715, False), ("Kevin Garnett", 14662, False),
-        ("Dwight Howard", 14627, False), ("Nate Thurmond", 14464, False), ("Walt Bellamy", 14241, False),
-        ("Wes Unseld", 13769, False), ("Hakeem Olajuwon", 13748, False), ("Shaquille O'Neal", 13099, False),
-        ("Buck Williams", 13017, False), ("Jerry Lucas", 12942, False), ("Bob Pettit", 12849, False),
-        ("Charles Barkley", 12546, False), ("Dikembe Mutombo", 12359, False), ("Paul Silas", 12357, False),
-        ("Charles Oakley", 12205, False), ("Dennis Rodman", 11954, False), ("Kevin Willis", 11901, False),
-        ("LeBron James", 11757, True), ("Patrick Ewing", 11607, False), ("Dirk Nowitzki", 11489, False),
-        ("Elgin Baylor", 11463, False), ("Pau Gasol", 11305, False), ("Dolph Schayes", 11256, False),
-        ("Andre Drummond", 11169, True), ("Bill Bridges", 11054, False), ("Jack Sikma", 10816, False),
-        ("DeAndre Jordan", 10795, True), ("David Robinson", 10497, False), ("Ben Wallace", 10482, False),
-        ("Tyson Chandler", 10467, False), ("Dave Cowens", 10444, False), ("Bill Laimbeer", 10400, False),
-        ("Otis Thorpe", 10370, False), ("Nikola Vucevic", 10368, True), ("Zach Randolph", 10208, False),
-        ("Shawn Marion", 10101, False), ("Red Kerr", 10092, False), ("Rudy Gobert", 9927, True),
-        ("Bob Lanier", 9698, False), ("Sam Lacey", 9687, False), ("Dave DeBusschere", 9618, False),
-        ("Kevin Love", 9553, True), ("Marcus Camby", 9513, False),
-        ("Al Horford", 9200, True), ("Russell Westbrook", 8700, True), ("Domantas Sabonis", 8000, True),
-        ("Nikola Jokic", 8100, True), ("Giannis Antetokounmpo", 8400, True), ("Anthony Davis", 7500, True),
-        ("Clint Capela", 6800, True), ("Jonas Valanciunas", 7200, True), ("Karl-Anthony Towns", 7200, True),
-        ("Bam Adebayo", 6400, True), ("Carmelo Anthony", 6924, False),
-    ]
-    _alltime_boards["STL"] = [
-        ("John Stockton", 3265, False), ("Chris Paul", 2726, True), ("Jason Kidd", 2684, False),
-        ("Michael Jordan", 2514, False), ("Gary Payton", 2445, False), ("LeBron James", 2346, True),
-        ("Maurice Cheeks", 2310, False), ("Scottie Pippen", 2307, False), ("Clyde Drexler", 2207, False),
-        ("Hakeem Olajuwon", 2162, False), ("Alvin Robertson", 2112, False), ("Karl Malone", 2085, False),
-        ("Mookie Blaylock", 2075, False), ("Allen Iverson", 1983, False), ("Russell Westbrook", 1969, True),
-        ("Derek Harper", 1957, False), ("Kobe Bryant", 1944, False), ("Isiah Thomas", 1861, False),
-        ("Kevin Garnett", 1859, False), ("Andre Iguodala", 1765, False), ("Shawn Marion", 1759, False),
-        ("Paul Pierce", 1752, False), ("James Harden", 1727, True), ("Magic Johnson", 1724, False),
-        ("Metta World Peace", 1721, False), ("Ron Harper", 1716, False), ("Fat Lever", 1666, False),
-        ("Charles Barkley", 1648, False), ("Gus Williams", 1638, False), ("Trevor Ariza", 1628, False),
-        ("Hersey Hawkins", 1622, False), ("Eddie Jones", 1620, False), ("Dwyane Wade", 1620, False),
-        ("Rod Strickland", 1616, False), ("Mike Conley", 1614, True), ("Thaddeus Young", 1612, False),
-        ("Mark Jackson", 1608, False), ("Jason Terry", 1603, False), ("Terry Porter", 1583, False),
-        ("Stephen Curry", 1573, True), ("Doc Rivers", 1563, False), ("Larry Bird", 1556, False),
-        ("Doug Christie", 1555, False), ("Andre Miller", 1546, False), ("Nate McMillan", 1544, False),
-        ("Paul George", 1539, True), ("Jeff Hornacek", 1535, False), ("John Havlicek", 1512, False),
-        ("Rick Barry", 1504, False), ("Rajon Rondo", 1494, False), ("Tim Duncan", 1488, False),
-        ("Tony Parker", 1474, False), ("Kevin Durant", 1460, True), ("Reggie Miller", 1451, False),
-        ("Penny Hardaway", 1448, False), ("Tony Allen", 1441, False), ("Grant Hill", 1436, False),
-        ("Vince Carter", 1423, False), ("Tim Hardaway", 1428, False), ("Kyle Lowry", 1415, True),
-        ("Dirk Nowitzki", 1384, False), ("Chauncey Billups", 1372, False), ("Eric Snow", 1360, False),
-        ("Robert Horry", 1359, False), ("DeMar DeRozan", 1350, True), ("Jimmy Butler", 1340, True),
-        ("Jrue Holiday", 1330, True), ("Marcus Smart", 1200, True), ("Draymond Green", 1180, True),
-        ("Al Horford", 1160, True), ("Nikola Jokic", 1050, True), ("Giannis Antetokounmpo", 1000, True),
-    ]
-    _alltime_boards["BLK"] = [
-        ("Hakeem Olajuwon", 3830, False), ("Dikembe Mutombo", 3289, False),
-        ("Kareem Abdul-Jabbar", 3189, False), ("Mark Eaton", 3064, False), ("Tim Duncan", 3020, False),
-        ("David Robinson", 2954, False), ("Patrick Ewing", 2894, False), ("Shaquille O'Neal", 2732, False),
-        ("Tree Rollins", 2542, False), ("Robert Parish", 2361, False),
-        ("Alonzo Mourning", 2356, False), ("Marcus Camby", 2331, False), ("Dwight Howard", 2228, False),
-        ("Ben Wallace", 2137, False), ("Shawn Bradley", 2119, False), ("Manute Bol", 2086, False),
-        ("George T. Johnson", 2082, False), ("Brook Lopez", 2071, True), ("Kevin Garnett", 2037, False),
-        ("Larry Nance", 2027, False), ("Theo Ratliff", 1968, False), ("Pau Gasol", 1941, False),
-        ("Elton Brand", 1828, False), ("Anthony Davis", 1821, True), ("Jermaine O'Neal", 1820, False),
-        ("Elvin Hayes", 1771, False), ("Serge Ibaka", 1759, False), ("Artis Gilmore", 1747, False),
-        ("Rudy Gobert", 1743, True), ("Moses Malone", 1733, False), ("Josh Smith", 1713, False),
-        ("Kevin McHale", 1690, False), ("Vlade Divac", 1631, False), ("Herb Williams", 1605, False),
-        ("Elden Campbell", 1602, False), ("Benoit Benjamin", 1581, False), ("Rasheed Wallace", 1530, False),
-        ("Clifford Robinson", 1517, False), ("Myles Turner", 1510, True), ("LaMarcus Aldridge", 1500, False),
-        ("DeAndre Jordan", 1498, False), ("Clint Capela", 1460, True), ("Andrew Bogut", 1455, False),
-        ("Samuel Dalembert", 1453, False), ("Giannis Antetokounmpo", 1400, True),
-        ("Jaren Jackson Jr.", 1050, True), ("Bam Adebayo", 900, True), ("Al Horford", 1350, True),
-        ("LeBron James", 1150, True), ("Joel Embiid", 950, True), ("Victor Wembanyama", 450, True),
-        ("Robert Williams III", 600, True), ("Kristaps Porzingis", 850, True), ("Nikola Vucevic", 850, True),
-        ("Jakob Poeltl", 800, True), ("Walker Kessler", 500, True), ("Ivica Zubac", 700, True),
-    ]
-    _alltime_boards["FG3M"] = [
-        ("Stephen Curry", 4233, True), ("Ray Allen", 2973, False), ("James Harden", 3318, True),
-        ("Damian Lillard", 2804, True), ("Reggie Miller", 2560, False), ("LeBron James", 2610, True),
-        ("Kyle Korver", 2450, False), ("Kevin Durant", 2307, True), ("Vince Carter", 2290, False),
-        ("Jason Terry", 2282, False), ("Jamal Crawford", 2221, False), ("Paul Pierce", 2143, False),
-        ("Jason Kidd", 1988, False), ("Klay Thompson", 2100, True), ("Joe Johnson", 1978, False),
-        ("Chris Paul", 1870, True), ("Kyle Lowry", 2060, True), ("J.J. Redick", 1950, False),
-        ("Wesley Matthews", 1890, False), ("Chauncey Billups", 1830, False),
-        ("Rashard Lewis", 1787, False), ("Steve Nash", 1685, False), ("Peja Stojakovic", 1760, False),
-        ("Eric Gordon", 1800, True), ("Dale Ellis", 1719, False), ("Russell Westbrook", 1500, True),
-        ("Glen Rice", 1559, False), ("Nick Van Exel", 1528, False), ("Tim Hardaway", 1542, False),
-        ("Danny Green", 1530, False), ("Buddy Hield", 1650, True), ("Donovan Mitchell", 1600, True),
-        ("CJ McCollum", 1550, True), ("Fred VanVleet", 1450, True), ("Jayson Tatum", 1500, True),
-        ("Manu Ginobili", 1495, False), ("DeMar DeRozan", 656, True), ("Trae Young", 1350, True),
-        ("Luka Doncic", 1300, True), ("Devin Booker", 1400, True),
-    ]
-    # Sort all fallback boards descending
-    for cat in _alltime_boards:
-        _alltime_boards[cat].sort(key=lambda x: x[1], reverse=True)
-    log.info(f"Hardcoded fallback loaded: {list(_alltime_boards.keys())}")
+    # Fallback: use verified data if API failed
+    if not _alltime_boards:
+        log.info("Loading hardcoded all-time leaders fallback (source: landofbasketball.com, Feb 2026)")
+        _alltime_boards["PTS"] = [
+            ("LeBron James", 42975, True), ("Kareem Abdul-Jabbar", 38387, False), ("Karl Malone", 36928, False),
+            ("Kobe Bryant", 33643, False), ("Michael Jordan", 32292, False), ("Kevin Durant", 31862, True),
+            ("Dirk Nowitzki", 31560, False), ("Wilt Chamberlain", 31419, False), ("James Harden", 28863, True),
+            ("Shaquille O'Neal", 28596, False), ("Carmelo Anthony", 28289, False), ("Moses Malone", 27409, False),
+            ("Elvin Hayes", 27313, False), ("Russell Westbrook", 27001, True), ("Hakeem Olajuwon", 26946, False),
+            ("Oscar Robertson", 26710, False), ("Dominique Wilkins", 26668, False), ("Tim Duncan", 26496, False),
+            ("Stephen Curry", 26447, True), ("Paul Pierce", 26397, False), ("John Havlicek", 26395, False),
+            ("DeMar DeRozan", 26339, True), ("Kevin Garnett", 26071, False), ("Vince Carter", 25728, False),
+            ("Alex English", 25613, False), ("Reggie Miller", 25279, False), ("Jerry West", 25192, False),
+            ("Patrick Ewing", 24815, False), ("Ray Allen", 24505, False), ("Allen Iverson", 24368, False),
+            ("Charles Barkley", 23757, False), ("Robert Parish", 23334, False), ("Adrian Dantley", 23177, False),
+            ("Dwyane Wade", 23165, False), ("Elgin Baylor", 23149, False), ("Chris Paul", 23058, True),
+            ("Damian Lillard", 22598, True), ("Clyde Drexler", 22195, False), ("Gary Payton", 21813, False),
+            ("Larry Bird", 21791, False), ("Hal Greer", 21586, False), ("Giannis Antetokounmpo", 21377, True),
+            ("Walt Bellamy", 20941, False), ("Pau Gasol", 20894, False), ("Bob Pettit", 20880, False),
+            ("David Robinson", 20790, False), ("George Gervin", 20708, False), ("LaMarcus Aldridge", 20558, False),
+            ("Mitch Richmond", 20497, False), ("Joe Johnson", 20407, False),
+            ("Tom Chambers", 20049, False), ("Antawn Jamison", 20042, False), ("Kyrie Irving", 19600, True),
+            ("Paul George", 19200, True), ("Tony Parker", 19473, False), ("Jamal Crawford", 19419, False),
+            ("Nikola Jokic", 18400, True), ("Jimmy Butler", 17800, True), ("Bradley Beal", 17200, True),
+            ("Devin Booker", 16800, True), ("Jayson Tatum", 16500, True), ("Anthony Davis", 16400, True),
+            ("Donovan Mitchell", 15000, True), ("Karl-Anthony Towns", 15890, True),
+            ("Zach LaVine", 14600, True), ("Jrue Holiday", 14800, True), ("Khris Middleton", 14400, True),
+            ("Brook Lopez", 14300, True), ("Al Horford", 14960, True), ("Mike Conley", 14200, True),
+            ("Shai Gilgeous-Alexander", 13500, True), ("De'Aaron Fox", 12800, True),
+            ("Trae Young", 12400, True), ("Luka Doncic", 12300, True), ("Domantas Sabonis", 12100, True),
+            ("Pascal Siakam", 12000, True), ("Julius Randle", 11800, True), ("Bam Adebayo", 11500, True),
+            ("Andrew Wiggins", 11400, True), ("Fred VanVleet", 9600, True),
+            ("Anthony Edwards", 9800, True), ("Tyrese Maxey", 8500, True),
+        ]
+        _alltime_boards["AST"] = [
+            ("John Stockton", 15806, False), ("Jason Kidd", 12091, False), ("Chris Paul", 11700, True),
+            ("LeBron James", 11500, True), ("Steve Nash", 10335, False), ("Mark Jackson", 10334, False),
+            ("Magic Johnson", 10141, False), ("Russell Westbrook", 10100, True), ("Oscar Robertson", 9887, False),
+            ("Isiah Thomas", 9061, False), ("Gary Payton", 8966, False), ("Andre Miller", 8524, False),
+            ("James Harden", 8200, True), ("Rod Strickland", 7987, False), ("Rajon Rondo", 7584, False),
+            ("Maurice Cheeks", 7392, False), ("Lenny Wilkens", 7211, False), ("Tim Hardaway", 7095, False),
+            ("Tony Parker", 7036, False), ("Damian Lillard", 7200, True), ("Bob Cousy", 6955, False),
+            ("Guy Rodgers", 6917, False), ("Muggsy Bogues", 6726, False), ("Kevin Johnson", 6711, False),
+            ("Kyle Lowry", 6500, True), ("Reggie Theus", 6453, False), ("John Lucas", 6454, False),
+            ("Norm Nixon", 6386, False), ("Clyde Drexler", 6125, False), ("Scottie Pippen", 6135, False),
+            ("Stephen Curry", 6000, True), ("DeMar DeRozan", 5700, True), ("Derek Harper", 5765, False),
+            ("Deron Williams", 5765, False), ("Dwyane Wade", 5701, False), ("Nikola Jokic", 6600, True),
+            ("Chauncey Billups", 5633, False), ("Trae Young", 5600, True), ("John Wall", 5282, False),
+            ("Jrue Holiday", 5400, True), ("Mike Conley", 5600, True),
+            ("Baron Davis", 5044, False), ("Luka Doncic", 4800, True), ("Kyrie Irving", 5000, True),
+            ("Tyrese Haliburton", 3700, True), ("De'Aaron Fox", 4200, True),
+        ]
+        _alltime_boards["REB"] = [
+            ("Wilt Chamberlain", 23924, False), ("Bill Russell", 21620, False), ("Kareem Abdul-Jabbar", 17440, False),
+            ("Elvin Hayes", 16279, False), ("Moses Malone", 16212, False), ("Tim Duncan", 15091, False),
+            ("Karl Malone", 14968, False), ("Robert Parish", 14715, False), ("Kevin Garnett", 14662, False),
+            ("Nate Thurmond", 14464, False), ("Walt Bellamy", 14241, False), ("Dwight Howard", 14043, False),
+            ("Hakeem Olajuwon", 13748, False), ("Wes Unseld", 13769, False), ("Buck Williams", 13017, False),
+            ("Shaquille O'Neal", 13099, False), ("Bob Pettit", 12849, False), ("Charles Barkley", 12546, False),
+            ("Dikembe Mutombo", 12359, False), ("Paul Silas", 12357, False), ("Dennis Rodman", 11954, False),
+            ("Patrick Ewing", 11607, False), ("Dirk Nowitzki", 11489, False), ("Pau Gasol", 11305, False),
+            ("LeBron James", 11500, True), ("David Robinson", 10497, False), ("DeAndre Jordan", 10609, False),
+            ("Ben Wallace", 10482, False), ("Andre Drummond", 10225, False), ("Jack Sikma", 10363, False),
+            ("Domantas Sabonis", 8800, True), ("Nikola Jokic", 8200, True), ("Russell Westbrook", 8500, True),
+            ("Giannis Antetokounmpo", 8400, True), ("Rudy Gobert", 7600, True),
+            ("Anthony Davis", 7500, True), ("Karl-Anthony Towns", 6957, True),
+            ("Clint Capela", 6500, True), ("Jonas Valanciunas", 6800, True), ("Al Horford", 9000, True),
+            ("Bam Adebayo", 6400, True), ("Carmelo Anthony", 6924, False),
+        ]
+        _alltime_boards["STL"] = [
+            ("John Stockton", 3265, False), ("Jason Kidd", 2684, False), ("Michael Jordan", 2514, False),
+            ("Gary Payton", 2445, False), ("Maurice Cheeks", 2310, False), ("Scottie Pippen", 2307, False),
+            ("Clyde Drexler", 2207, False), ("Hakeem Olajuwon", 2162, False), ("Alvin Robertson", 2112, False),
+            ("Karl Malone", 2085, False), ("Mookie Blaylock", 2075, False), ("Kobe Bryant", 1944, False),
+            ("Allen Iverson", 1983, False), ("LeBron James", 2400, True), ("Derek Harper", 1957, False),
+            ("John Havlicek", 1912, False), ("Isiah Thomas", 1861, False), ("Chris Paul", 2600, True),
+            ("Magic Johnson", 1724, False), ("Fat Lever", 1666, False), ("Charles Barkley", 1648, False),
+            ("Russell Westbrook", 2000, True), ("Rajon Rondo", 1613, False), ("Kevin Garnett", 1599, False),
+            ("Larry Bird", 1556, False), ("Rick Barry", 1556, False), ("Dwyane Wade", 1555, False),
+            ("Stephen Curry", 1650, True), ("James Harden", 1750, True), ("Tim Hardaway", 1428, False),
+            ("Shawn Marion", 1383, False), ("Andre Iguodala", 1363, False), ("Mike Conley", 1400, True),
+            ("Jrue Holiday", 1300, True), ("Paul George", 1350, True), ("Jimmy Butler", 1350, True),
+            ("Kyle Lowry", 1300, True), ("Jason Terry", 1265, False),
+        ]
+        _alltime_boards["BLK"] = [
+            ("Hakeem Olajuwon", 3830, False), ("Dikembe Mutombo", 3289, False), ("Tim Duncan", 2954, False),
+            ("David Robinson", 2954, False), ("Mark Eaton", 2894, False), ("Patrick Ewing", 2894, False),
+            ("Shaquille O'Neal", 2732, False), ("Kareem Abdul-Jabbar", 2694, False), ("Tree Rollins", 2542, False),
+            ("Alonzo Mourning", 2356, False), ("Marcus Camby", 2331, False), ("Shawn Bradley", 2119, False),
+            ("Ben Wallace", 2137, False), ("Manute Bol", 2086, False), ("George T. Johnson", 2082, False),
+            ("Larry Nance", 2027, False), ("Dwight Howard", 1914, False), ("Pau Gasol", 1941, False),
+            ("Serge Ibaka", 1868, False), ("Kevin Garnett", 1835, False), ("Brook Lopez", 1900, True),
+            ("Elvin Hayes", 1771, False), ("Vlade Divac", 1631, False), ("Theo Ratliff", 1541, False),
+            ("Josh Smith", 1489, False), ("Rasheed Wallace", 1460, False), ("Rudy Gobert", 1550, True),
+            ("Anthony Davis", 1750, True), ("Myles Turner", 1465, True), ("Giannis Antetokounmpo", 1350, True),
+            ("Al Horford", 1300, True), ("Clint Capela", 1100, True), ("LeBron James", 1150, True),
+            ("Joel Embiid", 900, True), ("Bam Adebayo", 680, True),
+        ]
+        _alltime_boards["FG3M"] = [
+            ("Stephen Curry", 4233, True), ("Ray Allen", 2973, False), ("James Harden", 3318, True),
+            ("Damian Lillard", 2804, True), ("Reggie Miller", 2560, False), ("LeBron James", 2610, True),
+            ("Kyle Korver", 2450, False), ("Kevin Durant", 2307, True), ("Vince Carter", 2290, False),
+            ("Jason Terry", 2282, False), ("Jamal Crawford", 2221, False), ("Paul Pierce", 2143, False),
+            ("Jason Kidd", 1988, False), ("Klay Thompson", 2100, True), ("Joe Johnson", 1978, False),
+            ("Chris Paul", 1870, True), ("Kyle Lowry", 2060, True), ("J.J. Redick", 1950, False),
+            ("Wesley Matthews", 1890, False), ("Chauncey Billups", 1830, False),
+            ("Rashard Lewis", 1787, False), ("Steve Nash", 1685, False), ("Peja Stojakovic", 1760, False),
+            ("Eric Gordon", 1800, True), ("Dale Ellis", 1719, False), ("Russell Westbrook", 1500, True),
+            ("Glen Rice", 1559, False), ("Nick Van Exel", 1528, False), ("Tim Hardaway", 1542, False),
+            ("Danny Green", 1530, False), ("Buddy Hield", 1650, True), ("Donovan Mitchell", 1600, True),
+            ("CJ McCollum", 1550, True), ("Fred VanVleet", 1450, True), ("Jayson Tatum", 1500, True),
+            ("Manu Ginobili", 1495, False), ("DeMar DeRozan", 656, True), ("Trae Young", 1350, True),
+            ("Luka Doncic", 1300, True), ("Devin Booker", 1400, True),
+        ]
+        _alltime_cache["at"] = True
+        # Sort all fallback boards descending
+        for cat in _alltime_boards:
+            _alltime_boards[cat].sort(key=lambda x: x[1], reverse=True)
+        log.info(f"Hardcoded fallback loaded: {list(_alltime_boards.keys())}")
 
 
 milestone_cache = TTLCache(maxsize=1, ttl=3600)  # 1 hour
@@ -4997,13 +4278,12 @@ last_good_milestones = {"screens": []}
 
 def _calculate_milestones():
     """Calculate who recently passed or is about to pass all-time leaders.
-    - Recently Passed: within 3 games, Top 200, 5 categories (no 3PM)
-    - Approaching: 5 separate screens (PTS, REB, AST, STL, BLK), within 3 games, Top 200
-    """
+    Uses live NBA API data for accurate career totals and rankings."""
     global last_good_milestones
     if "ms" in milestone_cache:
         return milestone_cache["ms"]
 
+    # Ensure all-time boards are loaded
     _fetch_alltime_leaders()
 
     if not _alltime_boards:
@@ -5016,82 +4296,88 @@ def _calculate_milestones():
         log.warning("Milestones: _player_full_stats empty — skipping (will retry on next call)")
         return last_good_milestones
 
-    MILESTONE_CATS = ["PTS", "REB", "AST", "STL", "BLK"]  # No FG3M
-    TOP_N = 200
-    PASSED_WINDOW = 10   # recently passed: scan within 10 games of production
-    # Category-specific approach windows (wider for low per-game stats)
-    APPROACH_WINDOWS = {
-        "PTS": 10,   # ~25ppg × 10 = 250
-        "REB": 15,   # ~8rpg × 15 = 120
-        "AST": 15,   # ~6apg × 15 = 90
-        "STL": 30,   # ~1spg × 30 = 30
-        "BLK": 30,   # ~1bpg × 30 = 30
-    }
-
     recently_passed = []
-    upcoming_by_cat = {cat: [] for cat in MILESTONE_CATS}
+    upcoming = []
 
-    for cat in MILESTONE_CATS:
-        board = _alltime_boards.get(cat, [])
+    for cat, board in _alltime_boards.items():
         if not board:
             continue
         cat_label = _CAT_LABELS.get(cat, cat)
-        # Only top 200
-        board_200 = board[:TOP_N]
         matched = 0
 
-        for rank_idx, (name, career_total, is_active) in enumerate(board_200):
+        # Identify active players and their per-game averages
+        for rank_idx, (name, career_total, is_active) in enumerate(board):
             my_rank = rank_idx + 1
 
+            # Check if player has current season stats (= active this season)
             norm_name = _normalize_name(name)
             season = _player_full_stats.get(norm_name, {}) or _player_full_stats.get(name, {})
             gp = int(season.get("GP", 0) or 0)
             per_game = float(season.get(cat, 0) or 0)
 
             if gp == 0 or per_game <= 0:
-                continue
+                continue  # Not active or no stats in this category
             matched += 1
 
-            three_game_prod = per_game * PASSED_WINDOW
+            # Season production = what this player has produced THIS season
+            season_production = per_game * gp
 
-            # Recently passed: scan all positions behind, break when gap too large
-            for behind_idx in range(rank_idx + 1, len(board_200)):
-                behind_name, behind_total, _ = board_200[behind_idx]
+            # Look at the 2 closest players behind (recently passed)
+            passed_count = 0
+            for behind_idx in range(rank_idx + 1, min(rank_idx + 8, len(board))):
+                if passed_count >= 2:
+                    break
+                behind_name, behind_total, _ = board[behind_idx]
                 behind_rank = behind_idx + 1
                 gap = career_total - behind_total
-                if gap > three_game_prod:
-                    break  # all further players will have bigger gaps
-                if gap > 0:
+
+                # Recently passed: within this season's total production
+                if 0 < gap <= season_production:
+                    passed_count += 1
                     recently_passed.append({
-                        "name": name, "cat": cat, "catLabel": cat_label,
-                        "current": career_total, "passedName": behind_name,
-                        "passedTotal": behind_total, "myRank": my_rank,
-                        "theirRank": behind_rank, "perGame": round(per_game, 1),
-                        "gap": gap, "type": "passed",
+                        "name": name,
+                        "cat": cat,
+                        "catLabel": cat_label,
+                        "current": career_total,
+                        "passedName": behind_name,
+                        "passedTotal": behind_total,
+                        "myRank": my_rank,
+                        "theirRank": behind_rank,
+                        "perGame": round(per_game, 1),
+                        "type": "passed",
                     })
 
-            # Approaching: scan all positions ahead, break when gap too large
-            approach_prod = per_game * APPROACH_WINDOWS.get(cat, 15)
-            for ahead_idx in range(rank_idx - 1, -1, -1):
-                ahead_name, ahead_total, _ = board_200[ahead_idx]
+            # Look at closest players ahead (about to pass)
+            upcoming_count = 0
+            for ahead_idx in range(rank_idx - 1, max(-1, rank_idx - 6), -1):
+                if upcoming_count >= 2:
+                    break
+                ahead_name, ahead_total, ahead_active = board[ahead_idx]
                 ahead_rank = ahead_idx + 1
                 gap = ahead_total - career_total
-                if gap > approach_prod:
-                    break  # all further players will have bigger gaps
-                if gap > 0:
+
+                # About to pass: reachable in ~15 games
+                if 0 < gap <= per_game * 15:
+                    upcoming_count += 1
                     games_needed = max(1, round(gap / per_game))
-                    upcoming_by_cat[cat].append({
-                        "name": name, "cat": cat, "catLabel": cat_label,
-                        "current": career_total, "targetName": ahead_name,
-                        "targetTotal": ahead_total, "remaining": gap,
-                        "myRank": my_rank, "theirRank": ahead_rank,
-                        "perGame": round(per_game, 1), "gamesNeeded": games_needed,
+                    upcoming.append({
+                        "name": name,
+                        "cat": cat,
+                        "catLabel": cat_label,
+                        "current": career_total,
+                        "targetName": ahead_name,
+                        "targetTotal": ahead_total,
+                        "remaining": gap,
+                        "myRank": my_rank,
+                        "theirRank": ahead_rank,
+                        "perGame": round(per_game, 1),
+                        "gamesNeeded": games_needed,
                         "type": "upcoming",
                     })
 
-        log.info(f"  Milestones {cat}: {matched} active players matched of {len(board_200)} in board (approach window={APPROACH_WINDOWS.get(cat, 15)} games)")
+        log.info(f"  Milestones {cat}: {matched} active players matched of {len(board)} in board")
 
-    # Deduplicate
+    # Deduplicate: same player+cat+target might appear multiple times
     seen = set()
     def dedup(items):
         result = []
@@ -5103,44 +4389,42 @@ def _calculate_milestones():
         return result
 
     recently_passed = dedup(recently_passed)
-    for cat in MILESTONE_CATS:
-        upcoming_by_cat[cat] = dedup(upcoming_by_cat[cat])
+    upcoming = dedup(upcoming)
 
-    # Sort: recently passed by smallest gap first (most recent passings), then by rank
-    recently_passed.sort(key=lambda x: (x["gap"], x["myRank"]))
-    for cat in MILESTONE_CATS:
-        upcoming_by_cat[cat].sort(key=lambda x: x["gamesNeeded"])
+    log.info(f"Milestones raw: {len(recently_passed)} recently passed, {len(upcoming)} upcoming")
+    if recently_passed:
+        for m in recently_passed[:3]:
+            log.info(f"  Recently passed: {m['name']} #{m['myRank']} passed {m['passedName']} in {m['catLabel']} ({m['current']:,} career)")
+    if upcoming:
+        for m in upcoming[:3]:
+            log.info(f"  Upcoming: {m['name']} ~{m['gamesNeeded']}gm from {m['targetName']} in {m['catLabel']}")
 
-    log.info(f"Milestones: {len(recently_passed)} recently passed")
-    for cat in MILESTONE_CATS:
-        log.info(f"  Approaching {cat}: {len(upcoming_by_cat[cat])} items")
+    # Sort: recently passed by most notable (lowest rank = most significant)
+    recently_passed.sort(key=lambda x: x["myRank"])
+    upcoming.sort(key=lambda x: x["gamesNeeded"])
 
-    # Build screens
+    # Build screens: 8 items per screen
+    all_items = recently_passed[:24] + upcoming[:32]
+    per_screen = 8
     source_note = "Career totals + current season averages × GP"
     screens = []
-    per_screen = 8
-
-    # Screen(s) for recently passed (all 5 cats mixed, max 2 screens)
-    if recently_passed:
-        capped = recently_passed[:10]  # max 10 items = most notable recent passings
+    for i in range(0, len(all_items), per_screen):
+        chunk = all_items[i:i+per_screen]
+        # Determine screen label
+        has_passed = any(m["type"] == "passed" for m in chunk)
+        has_upcoming = any(m["type"] == "upcoming" for m in chunk)
+        if has_passed and has_upcoming:
+            label = "Recent & Upcoming"
+        elif has_passed:
+            label = "Recently Passed"
+        else:
+            label = "Approaching"
         screens.append({
             "isMilestone": True,
-            "title": "Career Milestones — Recently Passed",
+            "title": f"Career Milestones — {label}",
             "source": source_note,
-            "items": capped,
+            "items": chunk,
         })
-
-    # 5 approaching screens — one per category (max 8 items each)
-    cat_titles = {"PTS": "Scoring", "REB": "Rebounds", "AST": "Assists", "STL": "Steals", "BLK": "Blocks"}
-    for cat in MILESTONE_CATS:
-        items = upcoming_by_cat[cat][:per_screen]  # cap at 8
-        if items:
-            screens.append({
-                "isMilestone": True,
-                "title": f"Approaching — All-Time {cat_titles[cat]}",
-                "source": source_note,
-                "items": items,
-            })
 
     result = {"screens": screens}
     if screens:
@@ -5148,8 +4432,7 @@ def _calculate_milestones():
         last_good_milestones = result
     else:
         log.warning("Milestones: 0 screens produced — NOT caching (will retry next call)")
-    total_approaching = sum(len(upcoming_by_cat[c]) for c in MILESTONE_CATS)
-    log.info(f"Milestones: {len(recently_passed)} recently passed, {total_approaching} approaching, {len(screens)} screens")
+    log.info(f"Milestones: {len(recently_passed)} recently passed, {len(upcoming)} upcoming, {len(screens)} screens")
     return result if screens else last_good_milestones
 
 
@@ -5160,244 +4443,177 @@ def api_milestones():
     return jsonify(data)
 
 
-@app.route("/api/refresh-alltime")
-def api_refresh_alltime():
-    """Force-refresh all-time leaders from Google Sheet."""
-    global _alltime_boards
-    _alltime_cache.clear()
-    milestone_cache.clear()
-    old_count = sum(len(b) for b in _alltime_boards.values())
-    _alltime_boards = {}
-    _fetch_alltime_leaders()
-    new_count = sum(len(b) for b in _alltime_boards.values())
-    return jsonify({"status": "ok", "source": "google_sheet", "old_entries": old_count, "new_entries": new_count,
-                    "categories": {cat: len(b) for cat, b in _alltime_boards.items()}})
-
-
-def _background_alltime_retry():
-    """Background thread: if initial API fetch failed, retry every 5 minutes."""
-    time.sleep(60)  # Wait 1 min after startup
-    for attempt in range(12):  # Try for up to 1 hour
-        total = sum(len(b) for b in _alltime_boards.values())
-        if total > 500:
-            log.info(f"Background alltime retry: data looks good ({total} entries), stopping")
-            return
-        log.info(f"Background alltime retry attempt {attempt+1}/12...")
-        _alltime_cache.clear()
-        _alltime_boards.clear()
-        _fetch_alltime_leaders()
-        total = sum(len(b) for b in _alltime_boards.values())
-        if total > 500:
-            milestone_cache.clear()  # Force milestones recalculation
-            log.info(f"Background alltime retry SUCCESS! {total} entries")
-            return
-        time.sleep(300)  # Wait 5 min
-    log.warning("Background alltime retry exhausted all attempts")
-
-
 # ═══════════════════════════════════════
 # DEPTH CHARTS (Google Sheets)
 # ═══════════════════════════════════════
 
-_DEPTH_ORDER_URL = "https://raw.githubusercontent.com/aderoa/DepthCharts/main/order.json"
-_DEPTH_ROSTER_SHEET_ID = "2PACX-1vSg6im6IYB6HXMGzQbmmBnLw9SfQLzxCSo8OfChxlJLhsB6BBCO0wPF_TMch0YgAbtFqYkwDWrsxRe7"
-_DEPTH_ROSTER_GID = "0"
+_DEPTH_SHEET_ID = "14TQPdQ9mDhHMMMQa5vcs0coL98ZloHORtYElDikKoWY"
+_DEPTH_GID = "24771201"
 
 depth_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min
 last_good_depth = []
 
 _POSITIONS = ["PG", "SG", "SF", "PF", "C"]
+_MAX_LEVELS = 10  # effectively unlimited
 _TEAMS_PER_SCREEN = 2
 
-# Abbrev → full city name for depth chart headers
-_ABBREV_TO_CITY = {
-    "ATL": "Atlanta", "BOS": "Boston", "BKN": "Brooklyn", "CHA": "Charlotte",
-    "CHI": "Chicago", "CLE": "Cleveland", "DAL": "Dallas", "DEN": "Denver",
-    "DET": "Detroit", "GSW": "Golden State", "HOU": "Houston", "IND": "Indiana",
-    "LAC": "LA Clippers", "LAL": "LA Lakers", "MEM": "Memphis", "MIA": "Miami",
-    "MIL": "Milwaukee", "MIN": "Minnesota", "NOP": "New Orleans", "NYK": "New York",
-    "OKC": "Oklahoma City", "ORL": "Orlando", "PHI": "Philadelphia", "PHX": "Phoenix",
-    "POR": "Portland", "SAC": "Sacramento", "SAS": "San Antonio", "TOR": "Toronto",
-    "UTA": "Utah", "WAS": "Washington",
-}
+# Teams appear alphabetically in the depth chart sheet
+_NBA_TEAMS_ALPHA = [
+    "Atlanta Hawks", "Boston Celtics", "Brooklyn Nets", "Charlotte Hornets",
+    "Chicago Bulls", "Cleveland Cavaliers", "Dallas Mavericks", "Denver Nuggets",
+    "Detroit Pistons", "Golden State Warriors", "Houston Rockets", "Indiana Pacers",
+    "LA Clippers", "Los Angeles Lakers", "Memphis Grizzlies", "Miami Heat",
+    "Milwaukee Bucks", "Minnesota Timberwolves", "New Orleans Pelicans", "New York Knicks",
+    "Oklahoma City Thunder", "Orlando Magic", "Philadelphia 76ers", "Phoenix Suns",
+    "Portland Trail Blazers", "Sacramento Kings", "San Antonio Spurs", "Toronto Raptors",
+    "Utah Jazz", "Washington Wizards",
+]
 
 
 def fetch_depth():
-    """Fetch depth chart data from GitHub order.json + roster CSV."""
+    """Fetch depth chart data from Google Sheet, packed 3 teams per screen."""
     global last_good_depth
 
     if "depth" in depth_cache:
         return depth_cache["depth"]
 
-    # 1. Fetch order.json from GitHub
-    log.info("Fetching depth chart order from GitHub...")
-    try:
-        resp = requests.get(_DEPTH_ORDER_URL, timeout=15)
-        resp.raise_for_status()
-        order_data = resp.json()  # {"BOS": {"PG": ["name1", ...], ...}, ...}
-    except Exception as e:
-        log.warning(f"Depth chart order.json fetch failed: {e}")
-        return last_good_depth
-
-    if not order_data:
-        log.warning("Depth chart order.json: empty")
-        return last_good_depth
-
-    # 2. Fetch roster CSV for player details (team, salary, position, headshot)
-    roster_url = (
-        f"https://docs.google.com/spreadsheets/d/e/{_DEPTH_ROSTER_SHEET_ID}"
-        f"/pub?gid={_DEPTH_ROSTER_GID}&single=true&output=csv"
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_DEPTH_SHEET_ID}"
+        f"/export?format=csv&gid={_DEPTH_GID}"
     )
-    log.info("Fetching depth chart roster CSV...")
+    log.info("Fetching depth charts from Google Sheet...")
+
     try:
-        resp = requests.get(roster_url, timeout=15)
+        resp = requests.get(csv_url, timeout=30)
         resp.raise_for_status()
         resp.encoding = 'utf-8'
     except Exception as e:
-        log.warning(f"Depth chart roster CSV fetch failed: {e}")
+        log.warning(f"Depth charts fetch failed: {e}")
         return last_good_depth
 
+    import re
     reader = list(csv.reader(io.StringIO(resp.text)))
-    if len(reader) < 2:
-        log.warning("Depth chart roster CSV: too few rows")
+    if len(reader) < 5:
         return last_good_depth
 
-    # Parse roster header
-    header = [h.strip().upper() for h in reader[0]]
-    def col(name):
-        return next((i for i, h in enumerate(header) if h == name), -1)
+    # Find header rows (PG/SG/SF/PF/C) to delimit team blocks
+    header_rows = []
+    pos_set_detect = {"PG", "SG", "SF", "PF", "C"}
+    for ri, row in enumerate(reader):
+        if len(row) >= 5:
+            cols = [row[i].strip() for i in range(5)]
+            if all(c in pos_set_detect for c in cols):
+                header_rows.append(ri)
 
-    PI, TI, SI = col("PLAYER"), col("TEAM"), col("2026")
-    POI, HI = col("POSITION"), col("HEADSHOT")
-    STI = col("ST 25-26")  # Contract status (GUARANTEED, TWO-WAY, 10-DAY)
+    log.info(f"Depth charts: found {len(header_rows)} header rows (salary lookup: {len(_salary_team_lookup)} players, name maps: {len(_full_name_map)} abbrevs, {len(_last_name_map)} last names)")
 
-    if PI < 0 or TI < 0:
-        log.warning("Depth chart roster CSV: missing PLAYER or TEAM column")
-        return last_good_depth
-
-    # Build player lookup
-    player_map = {}  # name → {team, salary, position, headshot, contractStatus}
-    for row in reader[1:]:
-        if len(row) <= max(PI, TI):
-            continue
-        name = row[PI].strip()
-        team = row[TI].strip()
-        if not name or not team:
-            continue
-        sal_raw = row[SI].replace("$", "").replace(",", "").strip() if SI >= 0 and SI < len(row) else "0"
-        salary = int(sal_raw) if sal_raw.isdigit() else 0
-        pos = row[POI].strip() if POI >= 0 and POI < len(row) else "SF"
-        headshot = row[HI].strip() if HI >= 0 and HI < len(row) else ""
-        contract = row[STI].strip() if STI >= 0 and STI < len(row) else "GUARANTEED"
-        player_map[name] = {
-            "team": team, "salary": salary, "position": pos,
-            "headshot": headshot, "contractStatus": contract,
-        }
-
-    log.info(f"Depth chart roster: {len(player_map)} players from CSV")
-
-    # 3. Build depth charts from order.json (row-based)
     all_teams = []
-    for team_abbr in sorted(order_data.keys()):
-        team_order = order_data[team_abbr]
-        city = _ABBREV_TO_CITY.get(team_abbr, team_abbr)
+    pos_set = set(_POSITIONS)  # {"PG", "SG", "SF", "PF", "C"}
+    for hi, hrow in enumerate(header_rows):
+        end = header_rows[hi + 1] if hi + 1 < len(header_rows) else len(reader)
+        # Read actual position labels from this header row (but force standard for display)
+        # Memphis has PF/PF instead of PF/C, but structurally col 5 is always the center
 
-        # For each position, walk the ordered list
-        # __SEPARATOR__ marks transition from active → out/injured
-        active_by_pos = {}   # pos → [player_entry, ...]
-        out_by_pos = {}      # pos → [player_entry, ...]
-        for pos in _POSITIONS:
-            names = team_order.get(pos, [])
-            active_by_pos[pos] = []
-            out_by_pos[pos] = []
-            past_sep = False
-            for name in names:
-                if name == "__SEPARATOR__":
-                    past_sep = True
-                    continue
-                if name == "__SPACER__":
-                    continue
-                info = player_map.get(name, {})
-                if not info:
-                    # Try case-insensitive match
-                    for pn, pi in player_map.items():
-                        if pn.lower() == name.lower():
-                            info = pi
-                            break
-                if not info:
-                    continue
-                sal = info.get("salary", 0) or _player_salary_raw.get(name, 0)
-                sal_str = f"${sal:,}" if sal > 0 else (_player_salary_map.get(name, "") or "")
-
-                is_out = name in _out_players
-                is_quest = name in _questionable_players
-
-                player_entry = {
-                    "pos": pos,
-                    "name": name,
-                    "salary": sal_str,
-                    "country": _PLAYER_COUNTRY.get(name, ""),
-                    "questionable": is_quest,
-                    "out": is_out,
-                }
-
-                # Below separator OR confirmed Out by injury data → out section
-                if past_sep or is_out:
-                    out_by_pos[pos].append(player_entry)
-                else:
-                    active_by_pos[pos].append(player_entry)
-
-        # Build row-based levels
-        max_active = max((len(active_by_pos[pos]) for pos in _POSITIONS), default=0)
-        max_out = max((len(out_by_pos[pos]) for pos in _POSITIONS), default=0)
-
+        # Parse depth levels: pairs of (name_row, salary_row)
         levels = []
-        for row_idx in range(max_active):
-            label = "Starters" if row_idx == 0 else "Bench" if row_idx == 1 else f"Reserve"
-            level = {"label": label, "players": []}
-            for pos in _POSITIONS:
-                if row_idx < len(active_by_pos[pos]):
-                    level["players"].append(active_by_pos[pos][row_idx])
-            if level["players"]:
-                levels.append(level)
+        ri = hrow + 1
+        while ri < end and len(levels) < _MAX_LEVELS:
+            row = reader[ri] if ri < len(reader) else []
+            if len(row) < 5:
+                ri += 1
+                continue
+            cols = [row[i].strip() if i < len(row) else "" for i in range(5)]
+            if not any(cols):
+                ri += 1
+                continue
+            # Detect next team's position header row
+            if all(c in pos_set_detect for c in cols):
+                break
 
-        for row_idx in range(max_out):
-            level = {"label": "Out", "players": []}
-            for pos in _POSITIONS:
-                if row_idx < len(out_by_pos[pos]):
-                    level["players"].append(out_by_pos[pos][row_idx])
-            if level["players"]:
-                levels.append(level)
+            is_salary = any(c.startswith("$") for c in cols if c)
+            if not is_salary and any(cols):
+                names = cols
+                salaries = ["", "", "", "", ""]
+                if ri + 1 < end:
+                    next_row = reader[ri + 1] if ri + 1 < len(reader) else []
+                    next_cols = [next_row[j].strip() if j < len(next_row) else "" for j in range(5)]
+                    if any(c.startswith("$") for c in next_cols if c):
+                        salaries = next_cols
+                        ri += 1
+
+                level_idx = len(levels)
+                label = "Starters" if level_idx == 0 else "Bench" if level_idx == 1 else "Out"
+                level = {"label": label, "players": []}
+                for pi in range(5):
+                    if names[pi]:
+                        full_name = resolve_player_name(names[pi])
+                        level["players"].append({
+                            "pos": _POSITIONS[pi],
+                            "name": full_name,
+                            "salary": salaries[pi],
+                            "country": _PLAYER_COUNTRY.get(full_name, _PLAYER_COUNTRY.get(names[pi], "")),
+                            "questionable": full_name in _questionable_players,
+                        })
+                if level["players"]:
+                    levels.append(level)
+
+            ri += 1
 
         if levels:
-            all_teams.append({"name": city, "levels": levels})
+            # Identify team by looking up player names in salary data
+            team_votes = {}
+            unmatched = []
+            for level in levels:
+                for p in level["players"]:
+                    t = _salary_team_lookup.get(p["name"], "")
+                    if t:
+                        team_votes[t] = team_votes.get(t, 0) + 1
+                    else:
+                        unmatched.append(p["name"])
+            if team_votes:
+                team_name = max(team_votes, key=team_votes.get)
+            else:
+                team_name = f"Unknown Team {hi + 1}"
+            if unmatched:
+                log.info(f"  Block {hi}: {team_name} ({team_votes.get(team_name,0)} votes, unmatched: {unmatched})")
+            else:
+                log.info(f"  Block {hi}: {team_name} ({team_votes.get(team_name,0)} votes, all matched)")
+            all_teams.append({"name": team_name, "levels": levels})
 
-    # Sort teams alphabetically
+    # Sort teams alphabetically for display
     all_teams.sort(key=lambda t: t["name"])
 
-    # 4. Build cross-reference maps for other features
+    # Build player→team cross-reference for team ratings
     _player_team_map.clear()
     _player_position_map.clear()
     _depth_starters.clear()
-    _depth_by_pos.clear()
     for t in all_teams:
-        pos_depth = {}
+        if t["name"].startswith("Unknown"):
+            continue  # Don't pollute map with unidentified teams
         for level in t["levels"]:
             for p in level["players"]:
                 _player_team_map[p["name"]] = t["name"]
+                # Populate position for ALL players (not just starters)
+                # First occurrence wins (starters come first, so their position takes priority)
                 if p["name"] not in _player_position_map:
                     _player_position_map[p["name"]] = p["pos"]
-                pos_depth.setdefault(p["pos"], []).append(p["name"])
-        _depth_by_pos[t["name"]] = pos_depth
+        # Populate starters (first level) — used for tonight's matchup logic
         if t["levels"]:
             starters = t["levels"][0]["players"]
             _depth_starters[t["name"]] = [{"name": p["name"], "pos": p["pos"]} for p in starters]
 
     log.info(f"  Position map: {len(_player_position_map)} players (starters: {sum(len(v) for v in _depth_starters.values())})")
-    team_names = [t["name"] for t in all_teams]
-    log.info(f"Depth charts: {len(all_teams)} teams from order.json: {team_names[:10]}...")
 
-    # 5. Pack into screens
+    # Log all identified teams
+    team_names = [t["name"] for t in all_teams]
+    log.info(f"Depth charts: {len(all_teams)} teams identified: {team_names}")
+    has_memphis = any("emphis" in n for n in team_names)
+    log.info(f"Memphis present: {has_memphis}")
+    if not has_memphis:
+        # Log all vote results for debugging
+        log.warning("Memphis NOT found! Check team votes above.")
+
+    # Pack teams into screens
     screens = []
     for i in range(0, len(all_teams), _TEAMS_PER_SCREEN):
         batch = all_teams[i:i + _TEAMS_PER_SCREEN]
@@ -5418,15 +4634,14 @@ def fetch_depth():
 @app.route("/api/depth")
 def api_depth():
     """Return depth chart screens (multiple teams per screen).
-    Overlays questionable/out flags from current injury data."""
+    Overlays questionable flags from current injury data."""
     data = fetch_depth()
-    # Dynamically apply injury flags from latest data
+    # Dynamically apply questionable flags from latest injury data
     for screen in data:
         for team in screen.get("teams", []):
             for level in team.get("levels", []):
                 for p in level.get("players", []):
                     p["questionable"] = p["name"] in _questionable_players
-                    p["out"] = p["name"] in _out_players
     return jsonify({"screens": data, "count": len(data)})
 
 
@@ -5434,15 +4649,6 @@ def api_depth():
 def serve_index():
     """Serve the broadcast overlay page."""
     return send_from_directory(PROJECT_ROOT, "index.html")
-
-
-@app.route("/embed")
-def serve_embed():
-    """Serve the embeddable widget for HoopsHype.com."""
-    resp = send_from_directory(PROJECT_ROOT, "embed.html")
-    resp.headers["X-Frame-Options"] = "ALLOWALL"
-    resp.headers["Content-Security-Policy"] = "frame-ancestors *"
-    return resp
 
 
 @app.route("/hoopshype-logo.png")
@@ -5605,11 +4811,6 @@ def _prewarm_caches():
         log.warning(f"Pre-warm salaries failed: {e}")
 
     try:
-        fetch_injuries()  # Must be before depth — populates _questionable_players, _out_players
-    except Exception as e:
-        log.warning(f"Pre-warm injuries failed: {e}")
-
-    try:
         fetch_depth()  # Must be before ratings/comparisons — populates _player_team_map
     except Exception as e:
         log.warning(f"Pre-warm depth charts failed: {e}")
@@ -5621,6 +4822,11 @@ def _prewarm_caches():
         fetch_ratings()  # Needs _player_team_map for team names
     except Exception as e:
         log.warning(f"Pre-warm ratings failed: {e}")
+
+    try:
+        fetch_injuries()
+    except Exception as e:
+        log.warning(f"Pre-warm injuries failed: {e}")
 
     try:
         fetch_team_ratings()
@@ -5656,12 +4862,6 @@ def _prewarm_caches():
         fetch_advanced_stats()
     except Exception as e:
         log.warning(f"Pre-warm advanced stats failed: {e}")
-
-    # Bridge: fill gaps in _player_full_stats from team ratings
-    try:
-        _bridge_player_stats()
-    except Exception as e:
-        log.warning(f"Pre-warm bridge failed: {e}")
 
     try:
         fetch_comparisons()
@@ -5702,7 +4902,6 @@ if __name__ == "__main__":
     # Pre-warm caches in background thread (only in actual server process, not reloader)
     if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not config.DEBUG:
         threading.Thread(target=_prewarm_caches, daemon=True).start()
-        threading.Thread(target=_background_alltime_retry, daemon=True).start()
 
     app.run(
         host=config.SERVER_HOST,

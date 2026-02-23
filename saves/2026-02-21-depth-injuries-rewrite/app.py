@@ -157,44 +157,6 @@ def team_city(raw):
 
 BLUESKY_MAX_WORKERS = 20  # concurrent threads for fetching feeds
 
-# ---- Profanity filter ----
-_PROFANITY_WORDS = {
-    "fuck", "fucking", "fucked", "fucker", "fuckin", "fck", "fuk",
-    "shit", "shitty", "shitting", "bullshit",
-    "ass", "asshole", "assholes", "dumbass", "badass",
-    "bitch", "bitches", "bitching",
-    "damn", "damned", "goddamn", "goddamnit",
-    "dick", "dicks",
-    "cunt", "cunts",
-    "piss", "pissed", "pissing",
-    "whore", "slut", "hoe",
-    "nigga", "niggas", "nigger",
-    "retard", "retarded",
-    "stfu", "gtfo", "lmfao", "wtf", "af",
-}
-
-def _has_profanity(text):
-    """Check if text contains profanity. Returns True if profane."""
-    words = set(text.lower().split())
-    # Also check for words embedded in punctuation: "fuck!" → "fuck"
-    cleaned = set()
-    for w in words:
-        stripped = w.strip(".,!?;:\"'()[]{}#@*~`—–-…/\\")
-        if stripped:
-            cleaned.add(stripped)
-    return bool(cleaned & _PROFANITY_WORDS)
-
-
-# ---- NBA search queries (rotated each fetch cycle) ----
-_NBA_SEARCH_QUERIES = [
-    "NBA",
-    "NBA trade",
-    "NBA draft",
-    "NBA playoffs",
-    "NBA free agency",
-]
-_search_query_idx = 0
-
 
 def _fetch_one_feed(handle):
     """Fetch recent posts for a single Bluesky handle. Returns list of post dicts."""
@@ -275,182 +237,8 @@ def _fetch_one_feed(handle):
     return posts
 
 
-def _fetch_search_posts(curated_handles):
-    """Fetch NBA posts via Bluesky public search API. Returns list of post dicts.
-    Uses sort=top for engagement-ranked results, filters for quality."""
-    global _search_query_idx
-
-    # Pick 2 queries to run this cycle (rotate through the list)
-    queries_to_run = []
-    for _ in range(2):
-        queries_to_run.append(_NBA_SEARCH_QUERIES[_search_query_idx % len(_NBA_SEARCH_QUERIES)])
-        _search_query_idx += 1
-
-    # Normalize curated handles for dedup (strip leading @)
-    curated_set = set()
-    for h in curated_handles:
-        curated_set.add(h.lower().replace("@", ""))
-
-    all_search = []
-    seen_uris = set()
-
-    for query in queries_to_run:
-        try:
-            url = (
-                f"https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts"
-                f"?q={requests.utils.quote(query)}"
-                f"&sort=top&limit=50&lang=en"
-            )
-            resp = requests.get(url, headers=_HTTP_HEADERS, timeout=10)
-            resp.raise_for_status()
-            posts = resp.json().get("posts", [])
-            log.info(f"Bluesky search '{query}': {len(posts)} results")
-
-            for post in posts:
-                uri = post.get("uri", "")
-                if uri in seen_uris:
-                    continue
-                seen_uris.add(uri)
-
-                author = post.get("author", {})
-                handle = author.get("handle", "")
-                record = post.get("record", {})
-                text = record.get("text", "").strip()
-
-                # --- Quality filters ---
-
-                # Skip curated accounts (they're already in the reporter feed)
-                if handle.lower() in curated_set:
-                    continue
-
-                # Skip replies
-                if record.get("reply"):
-                    continue
-
-                # Engagement: 5+ likes
-                like_count = post.get("likeCount", 0)
-                if like_count < 5:
-                    continue
-
-                # Min length: skip very short posts
-                if len(text) < 40:
-                    continue
-
-                # Profanity filter
-                if _has_profanity(text):
-                    continue
-
-                # Skip posts that are just links with no real text
-                text_no_urls = text
-                for word in text.split():
-                    if word.startswith("http://") or word.startswith("https://"):
-                        text_no_urls = text_no_urls.replace(word, "")
-                if len(text_no_urls.strip()) < 30:
-                    continue
-
-                created = record.get("createdAt", "")
-
-                post_data = {
-                    "author": author.get("displayName", handle),
-                    "handle": f"@{handle}",
-                    "avatar": _initials(author.get("displayName", handle)),
-                    "avatarUrl": author.get("avatar", ""),
-                    "text": text,
-                    "time": _time_ago(created),
-                    "timestamp": created,
-                    "likes": like_count,
-                    "isSearch": True,  # Flag for interleaving
-                }
-
-                # Extract embedded images
-                embed = post.get("embed", {})
-                embed_type = embed.get("$type", "")
-                images = []
-                if "images" in embed_type or "recordWithMedia" in embed_type:
-                    img_list = embed.get("images", [])
-                    if not img_list and "media" in embed:
-                        img_list = embed["media"].get("images", [])
-                    for img in img_list[:2]:
-                        thumb = img.get("thumb", "")
-                        if thumb:
-                            images.append(thumb)
-                if images:
-                    post_data["images"] = images
-
-                # Extract quote posts
-                if "record" in embed_type:
-                    rec = embed.get("record", {})
-                    if "record" in rec:
-                        rec = rec["record"]
-                    q_author = rec.get("author", {})
-                    q_text = rec.get("value", {}).get("text", "") or rec.get("text", "")
-                    if q_text:
-                        post_data["quote"] = {
-                            "author": q_author.get("displayName", ""),
-                            "handle": q_author.get("handle", ""),
-                            "text": q_text[:200],
-                        }
-
-                all_search.append(post_data)
-
-        except Exception as e:
-            log.warning(f"Bluesky search '{query}' failed: {e}")
-
-    # Sort by timestamp (chronological, newest first) — interleave handles ratio
-    all_search.sort(key=lambda p: p.get("timestamp", ""), reverse=True)
-
-    # Cap at 70 search posts
-    all_search = all_search[:70]
-    log.info(f"Bluesky search: {len(all_search)} posts passed quality filters")
-
-    return all_search
-
-
-def _interleave_posts(reporter_posts, search_posts):
-    """Merge all posts chronologically, but cap search posts to 1-per-2 reporter ratio.
-    Walks the merged timeline and skips search posts if we've already hit the ratio."""
-    if not search_posts:
-        return reporter_posts
-    if not reporter_posts:
-        return search_posts
-
-    # Tag and merge
-    for p in reporter_posts:
-        p["_src"] = "r"
-    for p in search_posts:
-        p["_src"] = "s"
-
-    merged = reporter_posts + search_posts
-    merged.sort(key=lambda p: p.get("timestamp", ""), reverse=True)
-
-    # Walk chronologically, enforce ratio: allow 1 search per 2 reporter
-    result = []
-    r_count = 0   # reporter posts emitted since last search post
-    for p in merged:
-        if p["_src"] == "r":
-            result.append(p)
-            r_count += 1
-        else:
-            # Only include search post if we've seen 2+ reporter posts since the last one
-            if r_count >= 2:
-                result.append(p)
-                r_count = 0
-            # else: skip this search post (too many search posts in a row)
-
-    # Clean up internal tag
-    for p in result:
-        p.pop("_src", None)
-    for p in reporter_posts:
-        p.pop("_src", None)
-    for p in search_posts:
-        p.pop("_src", None)
-
-    return result
-
-
 def fetch_bluesky_posts():
-    """Fetch recent posts from configured Bluesky accounts via public API (parallelized),
-    plus NBA search posts interleaved for additional content."""
+    """Fetch recent posts from configured Bluesky accounts via public API (parallelized)."""
     global last_good_bluesky
 
     # Return cached if available
@@ -491,32 +279,17 @@ def fetch_bluesky_posts():
 
     log.info(f"Bluesky fetch done: {success_count} accounts returned posts, {fail_count} empty/failed")
 
-    # Sort reporter posts by timestamp (newest first)
+    # Sort by timestamp (newest first) — keep all posts for full feed
     all_posts.sort(key=lambda p: p.get("timestamp", ""), reverse=True)
 
-    # Fetch NBA search posts (runs 2 queries, ~70 filtered posts)
-    search_posts = []
-    try:
-        search_posts = _fetch_search_posts(accounts)
-    except Exception as e:
-        log.warning(f"Bluesky search fetch failed: {e}")
-
-    # Interleave: 2 reporter posts, then 1 search post
-    if search_posts:
-        combined = _interleave_posts(all_posts, search_posts)
-        log.info(f"Bluesky combined: {len(all_posts)} reporter + {len(search_posts)} search = {len(combined)} total")
-    else:
-        combined = all_posts
-
-    if combined:
-        last_good_bluesky = combined
-        bluesky_cache["posts"] = combined
-        with_avatar = sum(1 for p in combined if p.get("avatarUrl"))
-        search_count = sum(1 for p in combined if p.get("isSearch"))
+    if all_posts:
+        last_good_bluesky = all_posts
+        bluesky_cache["posts"] = all_posts
+        with_avatar = sum(1 for p in all_posts if p.get("avatarUrl"))
         log.info(
-            f"Cached {len(combined)} Bluesky posts "
-            f"({len(combined) - search_count} reporter, {search_count} search, "
-            f"{with_avatar}/{len(combined)} have profile photos)"
+            f"Cached {len(all_posts)} Bluesky posts "
+            f"({with_avatar}/{len(all_posts)} have profile photos, "
+            f"newest: {all_posts[0].get('author', '?')})"
         )
     else:
         log.warning("No Bluesky posts fetched — check network or API endpoint")

@@ -502,6 +502,8 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 
 <script>
 const CONFIG={gameRotateInterval:20000,screenDurations:[9000,15000,15000,15000],rankingsRotateInterval:13500,tickerSpeed:50,autoModeHoursAfterLastGame:6,miniScoresVisible:5};
+const _isBroadcast=new URLSearchParams(window.location.search).has('broadcast');
+if(_isBroadcast){const s=document.createElement('style');s.textContent='.section-nav{display:none!important}';document.head.appendChild(s);}
 
 const MOCK_GAMES=[
   {id:'1',status:'live',period:'3RD QTR',periodNum:3,clock:'4:32',venue:'TD Garden, Boston',

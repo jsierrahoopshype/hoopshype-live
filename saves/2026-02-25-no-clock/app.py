@@ -4895,7 +4895,7 @@ def _calculate_milestones():
 
     # Screen(s) for recently passed (all 5 cats mixed, max 2 screens)
     if recently_passed:
-        capped = recently_passed[:8]  # max 8 items per screen = most notable recent passings
+        capped = recently_passed[:10]  # max 10 items = most notable recent passings
         screens.append({
             "isMilestone": True,
             "title": "Career Milestones — Recently Passed",

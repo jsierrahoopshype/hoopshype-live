@@ -57,7 +57,6 @@ _full_name_map = {}       # "L. James" → "LeBron James", etc.
 _player_team_map = {}     # "LeBron James" → "Los Angeles Lakers" (from depth charts)
 _player_position_map = {} # "LeBron James" → "PG" (starters only, from depth charts)
 _depth_starters = {}      # "Boston" → [{"name": "...", "pos": "PG"}, ...]
-_depth_by_pos = {}        # "Boston" → {"PG": ["Jrue Holiday", "Payton Pritchard"], ...}
 _player_full_stats = {}   # "LeBron James" → {"PTS": 25.1, "REB": 7.2, ...} (from NBA leagueleaders)
 _player_adv_stats = {}    # "LeBron James" → {"NET_RATING": 5.2, ...} (from GitHub JSON)
 _salary_team_lookup = {}  # "LeBron James" → "Los Angeles Lakers" (from salary data, for depth ID)
@@ -249,10 +248,6 @@ def fetch_bluesky_posts():
     accounts = list(config.BLUESKY_ACCOUNTS)
     if "hoopshypeofficial.bsky.social" not in accounts:
         accounts.append("hoopshypeofficial.bsky.social")
-
-    # Exclude specific accounts
-    _BLUESKY_EXCLUDE = {"danwolken.bsky.social", "sportsmediawatch.bsky.social", "shotdrjr.bsky.social"}
-    accounts = [a for a in accounts if a not in _BLUESKY_EXCLUDE]
 
     log.info(f"Fetching Bluesky feeds for {len(accounts)} accounts...")
 
@@ -917,12 +912,6 @@ def fetch_scores():
         f"cache TTL: {ttl}s)"
     )
 
-    # Invalidate preview cache when games start — previews should exclude live/final games
-    if live_count > 0 or final_count > 0:
-        if "gp" in preview_cache:
-            preview_cache.clear()
-            log.info("  Preview cache cleared — games have started/ended")
-
     return games
 
 
@@ -1164,14 +1153,14 @@ last_good_ratings = []
 
 # Column blocks: (start_col, title, num_players)
 _RATINGS_BLOCKS = [
-    (3,  "Global Rating — Last 365 Days", 20),
-    (14, "Global Rating — Season", 20),
-    (25, "Global Rating — Rookies", 20),
-    (36, "Global Rating — International", 20),
-    (47, "Global Rating — Sixth Man of the Year", 20),
-    (58, "Global Rating — Last 7 Days", 20),
-    (80, "Global Rating — Last 30 Days", 20),
-    (91, "Global Rating — Most In Form", 20),
+    (3,  "Global Rating — Last 365 Days", 24),
+    (14, "Global Rating — Season", 24),
+    (25, "Global Rating — Rookies", 24),
+    (36, "Global Rating — International", 24),
+    (47, "Global Rating — Sixth Man of the Year", 24),
+    (58, "Global Rating — Last 7 Days", 24),
+    (80, "Global Rating — Last 30 Days", 24),
+    (91, "Global Rating — Most In Form", 24),
 ]
 
 
@@ -1447,7 +1436,7 @@ def fetch_draft_classes():
 
     for year in sorted(by_class.keys(), reverse=True):
         players = sorted(by_class[year], key=lambda p: p["rating"], reverse=True)
-        players = players[:20]
+        players = players[:24]
         for i, p in enumerate(players):
             p["rank"] = i + 1
         top_n = players[:5]
@@ -1775,7 +1764,7 @@ def api_team_ratings():
 _HIST_SHEET_ID = "1ZrDfzqiC31Hu3YCtxT4aZbZF4QVCVyGe6wBytR2LF30"
 _HIST_GID = "1151460858"
 _HIST_START_YEAR = 1991
-_HIST_TOP_N = 20
+_HIST_TOP_N = 24
 
 hist_salaries_cache = TTLCache(maxsize=1, ttl=3600)  # 1 hour
 last_good_hist_salaries = []
@@ -1918,7 +1907,7 @@ _PCT_CATS = [
     ("FT_PCT", "Free Throw %", "FTA", 100),
 ]
 
-_STATS_TOP_N = 20
+_STATS_TOP_N = 24
 _STATS_MIN_GP = 15  # minimum GP for percentage leaders
 
 
@@ -2031,12 +2020,11 @@ def fetch_counting_stats():
         log.info(f"  Per Game: {len(rows_avg)} players, {len(_AVG_CATS)} categories")
 
         # Build full stats cache for comparisons
-        # Use a fresh dict then merge — preserves bridge entries for players not in leaders
         col_map_avg = {h: i for i, h in enumerate(h_avg)}
         player_i = col_map_avg.get("PLAYER", 2)
         team_i = col_map_avg.get("TEAM", 4)
         gp_i = col_map_avg.get("GP", 5)
-        new_stats = {}
+        _player_full_stats.clear()
         stat_keys = ["PTS", "REB", "AST", "STL", "BLK", "FG3M", "TOV", "FG_PCT", "FG3_PCT", "FT_PCT"]
         for row in rows_avg:
             name = _normalize_name(row[player_i])
@@ -2045,10 +2033,8 @@ def fetch_counting_stats():
                 si = col_map_avg.get(sk)
                 if si is not None:
                     d[sk] = row[si]
-            new_stats[name] = d
-        # Overwrite leader entries but keep bridge/supplement entries for missing players
-        _player_full_stats.update(new_stats)
-        log.info(f"  Full stats cache: {len(new_stats)} from leagueleaders (total: {len(_player_full_stats)})")
+            _player_full_stats[name] = d
+        log.info(f"  Full stats cache: {len(_player_full_stats)} players (from leagueleaders)")
 
         # Supplement with ALL players (catches LeBron, Giddey, etc. who don't qualify for leaders)
         try:
@@ -2087,62 +2073,12 @@ def fetch_counting_stats():
         except Exception as e:
             log.warning(f"  Supplementary stats fetch failed: {e}")
 
-        # Supplement 2: leaguedashplayerstats — catches ALL active players (no GP minimum)
-        for _dash_attempt in range(2):
-            try:
-                dash_url = "https://stats.nba.com/stats/leaguedashplayerstats"
-                dash_params = {
-                    "Season": season, "SeasonType": "Regular Season",
-                    "PerMode": "PerGame", "MeasureType": "Base", "LeagueID": "00",
-                }
-                dash_resp = requests.get(dash_url, params=dash_params, headers=_NBA_STATS_HEADERS, timeout=60)
-                dash_resp.raise_for_status()
-                dash_rs = dash_resp.json().get("resultSets", [{}])[0]
-                dash_headers = dash_rs.get("headers", [])
-                dash_rows = dash_rs.get("rowSet", [])
-                dash_col = {h: i for i, h in enumerate(dash_headers)}
-                dash_name_i = dash_col.get("PLAYER_NAME", 1)
-                dash_team_i = dash_col.get("TEAM_ABBREVIATION", 3)
-                dash_gp_i = dash_col.get("GP", 5)
-                dash_supplemented = 0
-                for row in dash_rows:
-                    name = _normalize_name(row[dash_name_i])
-                    if name not in _player_full_stats:
-                        d = {"GP": row[dash_gp_i], "TEAM": row[dash_team_i]}
-                        for sk in stat_keys:
-                            si = dash_col.get(sk)
-                            if si is not None:
-                                d[sk] = row[si]
-                        _player_full_stats[name] = d
-                        dash_supplemented += 1
-                    else:
-                        existing = _player_full_stats[name]
-                        for sk in stat_keys:
-                            if existing.get(sk) is None:
-                                si = dash_col.get(sk)
-                                if si is not None and row[si] is not None:
-                                    existing[sk] = row[si]
-                log.info(f"  Supplemented {dash_supplemented} NEW + patched existing from leaguedashplayerstats (total: {len(_player_full_stats)})")
-                break  # success
-            except Exception as e:
-                if _dash_attempt == 0:
-                    log.warning(f"  leaguedashplayerstats attempt 1 failed: {e} — retrying...")
-                    import time; time.sleep(2)
-                else:
-                    log.warning(f"  leaguedashplayerstats fetch failed after 2 attempts: {e} — will rely on bridge")
-
         # Diagnostic: check LeBron name variants
         lebron_keys = [k for k in _player_full_stats if 'james' in k.lower() or 'lebron' in k.lower()]
         log.info(f"  LeBron variants in stats: {lebron_keys}")
         for lk in lebron_keys:
             d = _player_full_stats[lk]
             log.info(f"    {lk}: STL={d.get('STL')}, BLK={d.get('BLK')}, FG_PCT={d.get('FG_PCT')}, keys={list(d.keys())}")
-
-        # Re-run bridge to fill gaps from team ratings (covers players not in any NBA API)
-        try:
-            _bridge_player_stats()
-        except Exception as e:
-            log.warning(f"  Bridge inside counting_stats failed: {e}")
 
         for stat_key, title, attempts_key, min_attempts in _PCT_CATS:
             stat_i = col_map_avg.get(stat_key)
@@ -2292,18 +2228,18 @@ def fetch_value_rankings():
         return last_good_value
 
     # Screen 1: Best Value — highest rating/$1M (all players min $500K)
-    best = [dict(p) for p in sorted(combined, key=lambda p: p["value"], reverse=True)[:20]]
+    best = [dict(p) for p in sorted(combined, key=lambda p: p["value"], reverse=True)[:24]]
     for i, p in enumerate(best):
         p["rank"] = i + 1
 
     # Screen 2: Worst Value — lowest rating/$1M among $10M+ earners
     big_earners = [p for p in combined if p["salary"] >= 10_000_000]
-    worst = [dict(p) for p in sorted(big_earners, key=lambda p: p["value"])[:20]]
+    worst = [dict(p) for p in sorted(big_earners, key=lambda p: p["value"])[:24]]
     for i, p in enumerate(worst):
         p["rank"] = i + 1
 
     # Screen 3: Lowest Rated $10M+ Players
-    overpaid = [dict(p) for p in sorted(big_earners, key=lambda p: p["rating"])[:20]]
+    overpaid = [dict(p) for p in sorted(big_earners, key=lambda p: p["rating"])[:24]]
     for i, p in enumerate(overpaid):
         p["rank"] = i + 1
 
@@ -2363,12 +2299,6 @@ _POS_COMPAT = {"PG": ["PG", "SG"], "SG": ["SG", "PG", "SF"], "SF": ["SF", "SG", 
                "PF": ["PF", "SF", "C"], "C": ["C", "PF"]}
 
 
-def _ultra_norm(name):
-    """Strip ALL non-alpha chars and lowercase for aggressive matching."""
-    import re
-    return re.sub(r'[^a-z]', '', _normalize_name(name).lower())
-
-
 def _find_stats(name):
     """Find full stats for a player with fuzzy matching."""
     if name in _player_full_stats:
@@ -2395,24 +2325,18 @@ def _find_stats(name):
             kp = k.split()
             if len(kp) >= 2 and kp[-1].lower() == last and kp[0][0].upper() == first_init:
                 return v
-    # Ultra-normalized match
-    ultra = _ultra_norm(name)
-    if ultra:
-        for k, v in _player_full_stats.items():
-            if _ultra_norm(k) == ultra:
-                return v
     # Fallback: build minimal stats from team ratings data (PTS/REB/AST/GP)
     for scr in (last_good_team_ratings or []):
         for p in scr.get("players", []):
-            if p["name"] == name and p.get("pts") not in (None, "", 0):
+            if p["name"] == name and p.get("ratingNum", 0) > 0:
                 d = {"GP": 0}
                 try: d["GP"] = int(p.get("games", 0))
                 except: pass
-                try: d["PTS"] = float(p["pts"])
+                try: d["PTS"] = float(p.get("pts", 0))
                 except: pass
-                try: d["REB"] = float(p["reb"])
+                try: d["REB"] = float(p.get("reb", 0))
                 except: pass
-                try: d["AST"] = float(p["ast"])
+                try: d["AST"] = float(p.get("ast", 0))
                 except: pass
                 return d
     return {}
@@ -2425,9 +2349,11 @@ def _find_adv(name):
     norm = _normalize_name(name)
     if norm in _player_adv_stats:
         return _player_adv_stats[norm]
+    # Try _full_name_map reverse
     for abbr, full in _full_name_map.items():
         if full == name and abbr in _player_adv_stats:
             return _player_adv_stats[abbr]
+    # Case-insensitive scan
     name_lower = ' '.join(name.lower().split())
     for k, v in _player_adv_stats.items():
         if ' '.join(k.lower().split()) == name_lower:
@@ -2439,11 +2365,6 @@ def _find_adv(name):
         for k, v in _player_adv_stats.items():
             kp = k.split()
             if len(kp) >= 2 and kp[-1].lower() == last and kp[0][0].upper() == first_init:
-                return v
-    ultra = _ultra_norm(name)
-    if ultra:
-        for k, v in _player_adv_stats.items():
-            if _ultra_norm(k) == ultra:
                 return v
     return {}
 
@@ -2482,52 +2403,26 @@ def _get_rating(name):
 
 
 def _s(label, va, vb, fmt="1", invert=False):
-    """Build one stat row. Returns None if both values missing (filtered out later)."""
-    if va is None and vb is None:
-        return None
-    va_f = float(va) if va is not None else None
-    vb_f = float(vb) if vb is not None else None
+    """Build one stat row for a comparison card."""
+    va = float(va or 0)
+    vb = float(vb or 0)
     if isinstance(va, str):
-        try: va_f = float(va)
-        except: va_f = None
+        try: va = float(va)
+        except: va = 0.0
     if isinstance(vb, str):
-        try: vb_f = float(vb)
-        except: vb_f = None
-    if va_f is not None and vb_f is not None:
-        if invert:
-            winner = "A" if va_f < vb_f else ("B" if vb_f < va_f else "tie")
-        else:
-            winner = "A" if va_f > vb_f else ("B" if vb_f > va_f else "tie")
-    elif va_f is not None:
-        winner = "B" if invert else "A"
-    elif vb_f is not None:
-        winner = "A" if invert else "B"
+        try: vb = float(vb)
+        except: vb = 0.0
+    if invert:
+        winner = "A" if va < vb else ("B" if vb < va else "tie")
     else:
-        winner = "tie"
-    return {
-        "label": label,
-        "a": round(va_f, 1) if va_f is not None else None,
-        "b": round(vb_f, 1) if vb_f is not None else None,
-        "fmt": fmt, "winner": winner
-    }
+        winner = "A" if va > vb else ("B" if vb > va else "tie")
+    return {"label": label, "a": round(float(va), 1), "b": round(float(vb), 1), "fmt": fmt, "winner": winner}
 
 
 def _build_comparison(name_a, name_b):
-    """Build comprehensive comparison between two players.
-    Returns None if either player is missing key counting stats."""
+    """Build comprehensive comparison between two players."""
     stats_a = _find_stats(name_a)
     stats_b = _find_stats(name_b)
-
-    # Gate: both players must have at least PTS + 2 of (STL, BLK, FG_PCT, FG3_PCT, FT_PCT)
-    _REQUIRED = ["PTS"]
-    _OPTIONAL = ["STL", "BLK", "FG_PCT", "FG3_PCT", "FT_PCT"]
-    for label, name, stats in [("A", name_a, stats_a), ("B", name_b, stats_b)]:
-        has_req = all(stats.get(k) is not None for k in _REQUIRED)
-        opt_count = sum(1 for k in _OPTIONAL if stats.get(k) is not None)
-        if not has_req or opt_count < 2:
-            log.warning(f"  Comparison SKIPPED: {name} has insufficient stats (req={has_req}, opt={opt_count}/5)")
-            return None
-
     adv_a = _find_adv(name_a)
     adv_b = _find_adv(name_b)
     rat_a = _get_rating(name_a)
@@ -2552,92 +2447,69 @@ def _build_comparison(name_a, name_b):
     counting.append(_s("Assists", stats_a.get("AST"), stats_b.get("AST")))
     counting.append(_s("Steals", stats_a.get("STL"), stats_b.get("STL")))
     counting.append(_s("Blocks", stats_a.get("BLK"), stats_b.get("BLK")))
-    fg_a = stats_a.get("FG_PCT")
-    fg_b = stats_b.get("FG_PCT")
-    counting.append(_s("FG%", fg_a * 100 if fg_a else None, fg_b * 100 if fg_b else None, "1"))
-    fg3_a = stats_a.get("FG3_PCT")
-    fg3_b = stats_b.get("FG3_PCT")
-    counting.append(_s("3P%", fg3_a * 100 if fg3_a else None, fg3_b * 100 if fg3_b else None, "1"))
-    ft_a = stats_a.get("FT_PCT")
-    ft_b = stats_b.get("FT_PCT")
-    counting.append(_s("FT%", ft_a * 100 if ft_a else None, ft_b * 100 if ft_b else None, "1"))
+    fg_a = (stats_a.get("FG_PCT") or 0) * 100 if stats_a.get("FG_PCT") else 0
+    fg_b = (stats_b.get("FG_PCT") or 0) * 100 if stats_b.get("FG_PCT") else 0
+    counting.append(_s("FG%", fg_a, fg_b, "1"))
+    fg3_a = (stats_a.get("FG3_PCT") or 0) * 100 if stats_a.get("FG3_PCT") else 0
+    fg3_b = (stats_b.get("FG3_PCT") or 0) * 100 if stats_b.get("FG3_PCT") else 0
+    counting.append(_s("3P%", fg3_a, fg3_b, "1"))
+    ft_a = (stats_a.get("FT_PCT") or 0) * 100 if stats_a.get("FT_PCT") else 0
+    ft_b = (stats_b.get("FT_PCT") or 0) * 100 if stats_b.get("FT_PCT") else 0
+    counting.append(_s("FT%", ft_a, ft_b, "1"))
     counting.append(_s("Turnovers", stats_a.get("TOV"), stats_b.get("TOV"), "1", invert=True))
-    counting = [c for c in counting if c is not None]
-    if counting:
-        sections.append({"label": "COUNTING STATS", "stats": counting})
+    sections.append({"label": "COUNTING STATS", "stats": counting})
 
     # ADVANCED
     advanced = []
     advanced.append(_s("Rating", rat_a, rat_b, "1"))
-    advanced.append(_s("+/-", adv_a.get("PLUS_MINUS"), adv_b.get("PLUS_MINUS"), "s1"))
     advanced.append(_s("Net Rating", adv_a.get("NET_RATING"), adv_b.get("NET_RATING"), "s1"))
-    advanced = [a for a in advanced if a is not None]
-    if advanced:
-        sections.append({"label": "ADVANCED", "stats": advanced})
+    sections.append({"label": "ADVANCED", "stats": advanced})
 
     # DEFENSE
     defense = []
-    dfg_a = adv_a.get("D_FG_PCT")
-    dfg_b = adv_b.get("D_FG_PCT")
-    xfg_a = adv_a.get("NORMAL_FG_PCT")
-    xfg_b = adv_b.get("NORMAL_FG_PCT")
-    defense.append(_s("Def FG%", dfg_a * 100 if dfg_a else None, dfg_b * 100 if dfg_b else None, "1", invert=True))
-    # Exp FG% — only add if at least one player has a meaningful value
-    xfg_a_val = round(float(xfg_a * 100), 1) if xfg_a else None
-    xfg_b_val = round(float(xfg_b * 100), 1) if xfg_b else None
-    if xfg_a_val is not None or xfg_b_val is not None:
-        defense.append({"label": "Exp FG%", "a": xfg_a_val, "b": xfg_b_val, "fmt": "1", "winner": "tie"})
-    if dfg_a is not None and xfg_a is not None and dfg_b is not None and xfg_b is not None:
-        diff_a = round(float((dfg_a - xfg_a) * 100), 1)
-        diff_b = round(float((dfg_b - xfg_b) * 100), 1)
-        defense.append({"label": "FG +/-", "a": diff_a, "b": diff_b, "fmt": "s1",
-                         "winner": "A" if diff_a < diff_b else ("B" if diff_b < diff_a else "tie")})
-    # Filter None from _s() AND rows where both a&b are None
-    defense = [d for d in defense if d is not None and not (d.get("a") is None and d.get("b") is None)]
-    if defense:
-        sections.append({"label": "DEFENSE", "stats": defense})
+    dfg_a = adv_a.get("D_FG_PCT") or 0
+    dfg_b = adv_b.get("D_FG_PCT") or 0
+    xfg_a = adv_a.get("NORMAL_FG_PCT") or 0
+    xfg_b = adv_b.get("NORMAL_FG_PCT") or 0
+    defense.append(_s("Def FG%", dfg_a * 100 if dfg_a else 0, dfg_b * 100 if dfg_b else 0, "1", invert=True))
+    defense.append({"label": "Exp FG%", "a": round(float(xfg_a * 100 if xfg_a else 0), 1),
+                     "b": round(float(xfg_b * 100 if xfg_b else 0), 1), "fmt": "1", "winner": "tie"})
+    diff_a = round(float(((dfg_a or 0) - (xfg_a or 0)) * 100), 1)
+    diff_b = round(float(((dfg_b or 0) - (xfg_b or 0)) * 100), 1)
+    defense.append({"label": "FG +/-", "a": diff_a, "b": diff_b, "fmt": "s1",
+                     "winner": "A" if diff_a < diff_b else ("B" if diff_b < diff_a else "tie")})
+    sections.append({"label": "DEFENSE", "stats": defense})
 
     # CLUTCH
     clutch = []
-    cgp_a = adv_a.get("CLUTCH_GP") or 0
-    cgp_b = adv_b.get("CLUTCH_GP") or 0
+    cgp_a = adv_a.get("CLUTCH_GP", 1) or 1
+    cgp_b = adv_b.get("CLUTCH_GP", 1) or 1
     for lbl, key in [("Points", "CLUTCH_PTS"), ("Rebounds", "CLUTCH_REB"),
                       ("Assists", "CLUTCH_AST"), ("Steals", "CLUTCH_STL"), ("Blocks", "CLUTCH_BLK")]:
-        raw_a = adv_a.get(key)
-        raw_b = adv_b.get(key)
-        va = round(float(raw_a / cgp_a), 1) if raw_a is not None and cgp_a > 0 else None
-        vb = round(float(raw_b / cgp_b), 1) if raw_b is not None and cgp_b > 0 else None
-        row = _s(lbl, va, vb)
-        if row is not None:
-            clutch.append(row)
-    if clutch:
-        sections.append({"label": "CLUTCH", "stats": clutch})
+        va = round(float((adv_a.get(key, 0) or 0) / cgp_a), 1)
+        vb = round(float((adv_b.get(key, 0) or 0) / cgp_b), 1)
+        clutch.append(_s(lbl, va, vb))
+    sections.append({"label": "CLUTCH", "stats": clutch})
 
     # HUSTLE
     hustle = []
-    hgp_a = adv_a.get("HUSTLE_GP") or 0
-    hgp_b = adv_b.get("HUSTLE_GP") or 0
+    hgp_a = adv_a.get("HUSTLE_GP", 1) or 1
+    hgp_b = adv_b.get("HUSTLE_GP", 1) or 1
     for lbl, key in [("Contested", "CONTESTED_SHOTS"), ("Deflections", "DEFLECTIONS"),
                       ("Charges", "CHARGES_DRAWN")]:
-        raw_a = adv_a.get(key)
-        raw_b = adv_b.get(key)
-        va = round(float(raw_a / hgp_a), 1) if raw_a is not None and hgp_a > 0 else None
-        vb = round(float(raw_b / hgp_b), 1) if raw_b is not None and hgp_b > 0 else None
-        row = _s(lbl, va, vb, "1")
-        if row is not None:
-            hustle.append(row)
-    if hustle:
-        sections.append({"label": "HUSTLE", "stats": hustle})
+        va = round(float((adv_a.get(key, 0) or 0) / hgp_a), 1)
+        vb = round(float((adv_b.get(key, 0) or 0) / hgp_b), 1)
+        fmt = "1"  # All hustle stats: 1 decimal
+        hustle.append(_s(lbl, va, vb, fmt))
+    sections.append({"label": "HUSTLE", "stats": hustle})
 
     # Score each section
     total_a = total_b = 0
     for sec in sections:
         sa = sb = 0
         for st in sec["stats"]:
-            if st is None:
-                continue
-            if st.get("winner") == "A": sa += 1
-            elif st.get("winner") == "B": sb += 1
+            if st["winner"] == "A": sa += 1
+            elif st["winner"] == "B": sb += 1
         sec["scoreA"] = sa
         sec["scoreB"] = sb
         total_a += sa
@@ -2731,44 +2603,6 @@ def fetch_advanced_stats():
     lebron_adv = [k for k in _player_adv_stats if 'james' in k.lower() or 'lebron' in k.lower()]
     log.info(f"  LeBron variants in adv stats: {lebron_adv}")
 
-    # Invalidate comparisons cache so they rebuild with new advanced data
-    comparisons_cache.clear()
-    log.info("  Comparisons cache cleared — will rebuild with advanced stats")
-
-
-def _bridge_player_stats():
-    """Fill _player_full_stats from team ratings for players still missing."""
-    if not last_good_team_ratings:
-        return 0
-    bridged = 0
-    for scr in last_good_team_ratings:
-        for p in scr.get("players", []):
-            name = p["name"]
-            if not p.get("ratingNum", 0) or p["ratingNum"] <= 0:
-                continue
-            if name in _player_full_stats:
-                continue
-            d = {"GP": 0}
-            try: d["GP"] = int(p.get("games", 0))
-            except: pass
-            try: d["PTS"] = float(p.get("pts", 0))
-            except: pass
-            try: d["REB"] = float(p.get("reb", 0))
-            except: pass
-            try: d["AST"] = float(p.get("ast", 0))
-            except: pass
-            _player_full_stats[name] = d
-            bridged += 1
-    log.info(f"  Bridge: {bridged} players added from team ratings (total: {len(_player_full_stats)})")
-    for check in ["LeBron James", "Giannis Antetokounmpo", "Stephen Curry", "Anthony Davis",
-                   "Tyler Herro", "Domantas Sabonis", "Trae Young", "Franz Wagner"]:
-        st = _player_full_stats.get(check) or _player_full_stats.get(_normalize_name(check)) or {}
-        if st:
-            log.info(f"  BRIDGE CHECK {check}: PTS={st.get('PTS')}, STL={st.get('STL')}, BLK={st.get('BLK')}, GP={st.get('GP')}")
-        else:
-            log.warning(f"  BRIDGE CHECK {check}: NOT FOUND")
-    return bridged
-
 
 def fetch_comparisons():
     """Build comparison screens: All-Star H2H and tonight's matchup previews."""
@@ -2776,11 +2610,6 @@ def fetch_comparisons():
 
     if "comp" in comparisons_cache:
         return comparisons_cache["comp"]
-
-    # Don't build comparisons until advanced stats are loaded
-    if not _player_adv_stats:
-        log.info("  Comparisons: waiting for advanced stats to load...")
-        return last_good_comparisons or {"screens": [], "count": 0}
 
     if not last_good_team_ratings:
         log.warning("Comparisons: team ratings not loaded yet, skipping")
@@ -2805,13 +2634,9 @@ def fetch_comparisons():
         home_abbr = pg.get("home", {}).get("abbr", "")
         away_city = team_city(away_abbr)
         home_city = team_city(home_abbr)
-        # Find starters for these teams (excluding confirmed Out players)
-        away_out = _get_out_names(away_abbr)
-        home_out = _get_out_names(home_abbr)
-        away_starters = [s for s in _depth_starters.get(away_city, [])
-                         if s["name"] not in away_out and _normalize_name(s["name"]) not in away_out]
-        home_starters = [s for s in _depth_starters.get(home_city, [])
-                         if s["name"] not in home_out and _normalize_name(s["name"]) not in home_out]
+        # Find starters for these teams
+        away_starters = _depth_starters.get(away_city, [])
+        home_starters = _depth_starters.get(home_city, [])
         if not away_starters or not home_starters:
             continue
 
@@ -2836,17 +2661,16 @@ def fetch_comparisons():
 
         if best:
             comp = _build_comparison(best[0], best[1])
-            if comp is not None:
-                label = pg.get("label", "") or ""
-                tip = pg.get("tip", "") or pg.get("clock", "") or ""
-                subtitle = (label + " · " + tip).strip(" ·") or "Upcoming"
-                screens.append({
-                    "title": f"{away_city} vs {home_city}",
-                    "subtitle": subtitle,
-                    "isComparison": True,
-                    "isPreview": True,
-                    "comparison": comp,
-                })
+            label = pg.get("label", "") or ""
+            tip = pg.get("tip", "") or pg.get("clock", "") or ""
+            subtitle = (label + " · " + tip).strip(" ·") or "Upcoming"
+            screens.append({
+                "title": f"{away_city} vs {home_city}",
+                "subtitle": subtitle,
+                "isComparison": True,
+                "isPreview": True,
+                "comparison": comp,
+            })
 
     # 2) ALL-STAR HEAD-TO-HEAD — random pairs using static positions
     available = [n for n in _ALL_STARS if _get_rating(n)]
@@ -2854,20 +2678,17 @@ def fetch_comparisons():
     if no_rating:
         log.warning(f"  All-Stars excluded (no rating): {no_rating}")
 
-    # Exclude players with NO counting stats at all
+    # Also exclude players with incomplete counting stats (missing STL/BLK/FG%)
     incomplete = []
     full_available = []
     for n in available:
         st = _find_stats(n)
-        if st.get("PTS") is not None:
+        if st.get("STL") is not None and st.get("BLK") is not None:
             full_available.append(n)
         else:
             incomplete.append(n)
     if incomplete:
-        log.warning(f"  All-Stars excluded (no stats at all): {incomplete}")
-    partial = [n for n in full_available if _find_stats(n).get("STL") is None]
-    if partial:
-        log.info(f"  All-Stars with partial stats (included anyway): {partial}")
+        log.warning(f"  All-Stars excluded (incomplete stats): {incomplete}")
     available = full_available
     log.info(f"  All-Stars available for H2H: {len(available)}/{len(_ALL_STARS)}")
 
@@ -2893,8 +2714,6 @@ def fetch_comparisons():
 
     for a, b in allstar_pairs:
         comp = _build_comparison(a, b)
-        if comp is None:
-            continue
         a_pos = _ALL_STARS.get(a, "")
         b_pos = _ALL_STARS.get(b, "")
         screens.append({
@@ -2932,7 +2751,7 @@ def _extract_broadcasters(bc_data):
 
 
 def _get_upcoming_games():
-    """Fetch today's or next game date from NBA schedule (used when scoreboard has no scheduled games)."""
+    """Fetch next game date from NBA schedule when no games today."""
     try:
         url = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
         log.info(f"Fetching upcoming games from {url}")
@@ -2941,7 +2760,7 @@ def _get_upcoming_games():
         data = resp.json()
         _schedule_cache["data"] = data  # Cache for season series / rest days
         today_str = _now_et().strftime("%Y-%m-%d")
-        log.info(f"  Schedule JSON loaded, looking for dates from {today_str} onward (ET)")
+        log.info(f"  Schedule JSON loaded, looking for dates after {today_str} (ET)")
         dates = data.get("leagueSchedule", {}).get("gameDates", [])
         log.info(f"  Found {len(dates)} game dates in schedule")
         if not dates:
@@ -2979,7 +2798,7 @@ def _get_upcoming_games():
                 # Last resort: just try to extract any 10-char date
                 game_date = raw_date[:10]
 
-            if not game_date or game_date < today_str:
+            if not game_date or game_date <= today_str:
                 continue
             games = []
             for g in gd.get("games", []):
@@ -3042,199 +2861,177 @@ def api_comparisons():
 
 
 # ═══════════════════════════════════════
-# INJURY REPORTS (GitHub JSON + Roster CSV)
+# INJURY REPORTS (Google Sheets)
 # ═══════════════════════════════════════
 
-_INJURIES_JSON_URL = "https://raw.githubusercontent.com/aderoa/Injuries/main/injuries.json"
 _INJURIES_SHEET_ID = "14TQPdQ9mDhHMMMQa5vcs0coL98ZloHORtYElDikKoWY"
 _INJURIES_GID = "306285159"
-_ROSTER_SHEET_ID = "2PACX-1vSg6im6IYB6HXMGzQbmmBnLw9SfQLzxCSo8OfChxlJLhsB6BBCO0wPF_TMch0YgAbtFqYkwDWrsxRe7"
+_INJURIES_JSON_URL = "https://raw.githubusercontent.com/aderoa/Injuries/main/injuries.json"
 
 injuries_cache = TTLCache(maxsize=1, ttl=900)  # 15 min
 last_good_injuries = []
 _questionable_players = set()  # Players with Questionable/Doubtful/Game Time Decision status
-_out_players = set()           # Players confirmed Out
-_injury_roster = {}           # player → {team, salary} from roster CSV
-_injury_days_map = {}         # player → days since last game
 
 
-def _fetch_injury_roster():
-    """Fetch roster CSV for team/salary mapping (used by injury screens)."""
-    global _injury_roster
-    if _injury_roster:
-        return _injury_roster
-    url = f"https://docs.google.com/spreadsheets/d/e/{_ROSTER_SHEET_ID}/pub?gid=0&single=true&output=csv"
+def _fetch_injuries_from_github():
+    """Fetch injury data from GitHub JSON (primary source, kept current by admin tool)."""
+    log.info("Fetching injury reports from GitHub JSON...")
     try:
-        resp = requests.get(url, timeout=15)
+        resp = requests.get(_INJURIES_JSON_URL, timeout=30)
         resp.raise_for_status()
-        resp.encoding = 'utf-8'
-        reader = list(csv.reader(io.StringIO(resp.text)))
-        if len(reader) < 2:
-            return _injury_roster
-        header = [h.strip().upper() for h in reader[0]]
-        p_idx = next((i for i, h in enumerate(header) if h == "PLAYER"), -1)
-        t_idx = next((i for i, h in enumerate(header) if h == "TEAM"), -1)
-        s_idx = next((i for i, h in enumerate(header) if h == "2026"), -1)
-        if p_idx < 0 or t_idx < 0:
-            log.warning("Injury roster CSV: missing PLAYER or TEAM column")
-            return _injury_roster
-        for row in reader[1:]:
-            if len(row) <= max(p_idx, t_idx):
+        entries = resp.json()
+        if not entries or len(entries) < 5:
+            log.warning(f"GitHub injuries JSON too short ({len(entries) if entries else 0} entries)")
+            return None
+        log.info(f"  GitHub injuries: {len(entries)} entries")
+
+        # Build latest status per player (last entry wins)
+        latest = {}
+        for e in entries:
+            player = e.get("player", "").strip()
+            if not player:
                 continue
-            player = row[p_idx].strip()
-            team = row[t_idx].strip()
-            sal_raw = row[s_idx].replace("$", "").replace(",", "").strip() if s_idx >= 0 and s_idx < len(row) else "0"
-            salary = int(sal_raw) if sal_raw.isdigit() else 0
-            if player and team:
-                _injury_roster[player] = {"team": team, "salary": salary}
-        log.info(f"Injury roster loaded: {len(_injury_roster)} players")
-    except Exception as e:
-        log.warning(f"Injury roster fetch failed: {e}")
-    return _injury_roster
+            latest[player] = {
+                "status": e.get("status", ""),
+                "injury": e.get("injury", ""),
+                "date": e.get("date", ""),
+            }
 
+        # Group by team using _player_team_map
+        teams = {}
+        for player, info in latest.items():
+            status = info["status"]
+            injury = info["injury"]
+            # Skip healthy/available players
+            if status.lower() in ("available", "") and not injury:
+                continue
 
-def _fetch_injury_days():
-    """Fetch days-since-last-game from Google Sheet CSV (cols 71/73)."""
-    global _injury_days_map
-    csv_url = (
-        f"https://docs.google.com/spreadsheets/d/{_INJURIES_SHEET_ID}"
-        f"/export?format=csv&gid={_INJURIES_GID}"
-    )
-    try:
-        resp = requests.get(csv_url, timeout=30)
-        resp.raise_for_status()
-        resp.encoding = 'utf-8'
-        reader = list(csv.reader(io.StringIO(resp.text)))
-        _injury_days_map = {}
-        for row in reader[1:]:
-            if len(row) > 73:
-                p = row[71].strip()
-                d = row[73].strip()
-                if p and d.isdigit():
-                    _injury_days_map[p] = int(d)
-        log.info(f"Injury days-since-last-game loaded: {len(_injury_days_map)} players")
+            # Look up team from depth chart map
+            team = _player_team_map.get(player, "")
+            if not team:
+                # Try case-insensitive partial match
+                player_lower = player.lower()
+                for k, v in _player_team_map.items():
+                    if k.lower() == player_lower:
+                        team = v
+                        break
+            if not team:
+                team = "Unknown"
+
+            if team not in teams:
+                teams[team] = []
+            teams[team].append({
+                "name": player,
+                "status": status,
+                "injury": injury,
+                "date": info["date"],
+                "salary": _player_salary_map.get(player, ""),
+                "country": _PLAYER_COUNTRY.get(player, ""),
+            })
+
+        if not teams:
+            log.warning("GitHub injuries: no teams found after processing")
+            return None
+
+        log.info(f"  GitHub injuries: {sum(len(v) for v in teams.values())} injured players across {len(teams)} teams")
+        return teams
     except Exception as e:
-        log.warning(f"Injury days fetch failed: {e}")
+        log.warning(f"GitHub injuries fetch failed: {e}")
+        return None
 
 
 def fetch_injuries():
-    """Fetch injury data from GitHub JSON, enriched with roster CSV and days-since-last-game."""
+    """Fetch injury report data. Primary: GitHub JSON. Fallback: Google Sheet."""
     global last_good_injuries
 
     if "injuries" in injuries_cache:
         return injuries_cache["injuries"]
 
-    # 1. Fetch injuries.json from GitHub
-    log.info(f"Fetching injuries from {_INJURIES_JSON_URL}")
+    # Try GitHub JSON first (most current source)
+    teams = _fetch_injuries_from_github()
+
+    # Fallback to Google Sheet if GitHub failed
+    if teams is None:
+        teams = _fetch_injuries_from_sheet()
+
+    if not teams:
+        return last_good_injuries
+
     try:
-        resp = requests.get(_INJURIES_JSON_URL, timeout=15)
+        resp = requests.get(csv_url, timeout=30)
         resp.raise_for_status()
-        entries = resp.json()
+        resp.encoding = 'utf-8'
     except Exception as e:
-        log.warning(f"Injuries JSON fetch failed: {e}")
+        log.warning(f"Injuries fetch failed: {e}")
         return last_good_injuries
 
-    if not entries or not isinstance(entries, list):
-        log.warning("Injuries JSON: empty or invalid format")
+    reader = list(csv.reader(io.StringIO(resp.text)))
+    if len(reader) < 2:
         return last_good_injuries
 
-    log.info(f"Injuries JSON: {len(entries)} entries")
-
-    # 2. Fetch roster for team/salary mapping (cached after first load)
-    roster = _fetch_injury_roster()
-
-    # 3. Fetch days-since-last-game
-    _fetch_injury_days()
-
-    # 4. Derive latest status per player (JSON is chronological, last entry wins)
-    latest = {}
-    for e in entries:
-        player = e.get("player", "").strip()
-        if player:
-            latest[player] = {
-                "status": e.get("status", "Available"),
-                "injury": e.get("injury", ""),
-                "date": e.get("date", ""),
-            }
-
-    # 5. Build team-grouped data — skip Available players
-    teams = {}  # team_name → [players]
-    for player, info in latest.items():
-        status = info["status"]
-        if status == "Available":
+    # Cols 17-23: Team, Player, _, Status, Injury, Date, GameStatus
+    teams = {}  # team -> [players]
+    for row_idx in range(1, len(reader)):
+        row = reader[row_idx]
+        if len(row) < 24:
             continue
 
-        # Team from roster CSV → fallback to _player_team_map → fallback to depth starters
-        r = roster.get(player, {})
-        team = r.get("team", "") or _player_team_map.get(player, "")
-        if not team:
-            # Try normalized name lookup
-            for t_name, starters in _depth_starters.items():
-                for s in starters:
-                    if s.get("name") == player:
-                        team = t_name
-                        break
-                if team:
-                    break
-        if not team:
-            log.debug(f"Injuries: no team found for '{player}', skipping")
-            continue
+        team = row[17].strip()
+        player = row[18].strip()
+        status = row[20].strip()       # Out, Available
+        injury = row[21].strip()       # Injury description
+        date = row[22].strip()         # Date
+        game_status = row[23].strip()  # Out, Questionable, Probable
 
-        # Salary: prefer roster CSV, then _player_salary_map
-        salary_raw = r.get("salary", 0) or _player_salary_raw.get(player, 0)
-        if salary_raw >= 1_000_000:
-            salary_str = f"${salary_raw / 1_000_000:.1f}M"
-        elif salary_raw >= 1_000:
-            salary_str = f"${salary_raw // 1_000}K"
-        elif salary_raw > 0:
-            salary_str = f"${salary_raw:,}"
-        else:
-            salary_str = _player_salary_map.get(player, "")
+        if not team or not player:
+            continue
+        # Skip fully healthy players
+        if not injury and status == "Available" and game_status == "Available":
+            continue
+        # Skip "Available" game status with no injury note
+        if game_status == "Available" and not injury:
+            continue
 
         if team not in teams:
             teams[team] = []
 
         teams[team].append({
             "name": player,
-            "status": status,
-            "injury": info["injury"],
-            "date": info["date"],
-            "salary": salary_str,
+            "status": game_status or status,
+            "injury": injury,
+            "date": date,
+            "salary": _player_salary_map.get(player, ""),
             "country": _PLAYER_COUNTRY.get(player, ""),
-            "days": _injury_days_map.get(player, 0),
         })
 
-    # 6. Update global questionable/out sets for depth chart cross-reference
+    # Build screens from teams dict
+    MAX_PER_COL = 14
+
+    # Update global questionable set for depth chart cross-reference
     _questionable_players.clear()
-    _out_players.clear()
     for team_name, team_players in teams.items():
         for p in team_players:
             st = (p["status"] or "").lower()
-            raw_name = p["name"]
             if st in ("questionable", "doubtful", "game time decision", "day-to-day"):
+                raw_name = p["name"]
                 _questionable_players.add(raw_name)
                 resolved = resolve_player_name(raw_name)
                 if resolved != raw_name:
                     _questionable_players.add(resolved)
-            if st == "out":
-                _out_players.add(raw_name)
-                resolved = resolve_player_name(raw_name)
-                if resolved != raw_name:
-                    _out_players.add(resolved)
     log.info(f"  Questionable/Doubtful players: {len(_questionable_players)} — {list(_questionable_players)[:10]}")
-    log.info(f"  Out players: {len(_out_players)} — {list(_out_players)[:10]}")
 
-    # 7. Build two-column screens
-    MAX_PER_COL = 14
-
+    # First build a flat list of team blocks (header + players)
     team_blocks = []
     for team_name in sorted(teams.keys()):
+        if team_name == "Unknown":
+            continue  # skip unknown teams
         team_players = teams[team_name]
         block = [{"isHeader": True, "team": team_name}]
         for p in team_players:
             block.append(p)
         team_blocks.append(block)
 
+    # Pack into columns, then pair columns into screens
     columns = []
     current_col = []
     current_rows = 0
@@ -3249,6 +3046,7 @@ def fetch_injuries():
     if current_col:
         columns.append(current_col)
 
+    # Pair columns into screens (left + right)
     screens = []
     for i in range(0, len(columns), 2):
         left = columns[i]
@@ -3264,10 +3062,66 @@ def fetch_injuries():
         last_good_injuries = screens
         total_injured = sum(1 for b in team_blocks for p in b if not p.get("isHeader"))
         log.info(f"Cached {len(screens)} injury screens ({total_injured} players across {len(teams)} teams)")
-        preview_cache.clear()
-        depth_cache.clear()  # Rebuild depth charts with updated Out/Questionable data
 
     return screens
+
+
+def _fetch_injuries_from_sheet():
+    """Fetch injury data from Google Sheet (fallback source). Returns teams dict or None."""
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_INJURIES_SHEET_ID}"
+        f"/export?format=csv&gid={_INJURIES_GID}"
+    )
+    log.info("Fetching injury reports from Google Sheet (fallback)...")
+
+    try:
+        resp = requests.get(csv_url, timeout=30)
+        resp.raise_for_status()
+        resp.encoding = 'utf-8'
+    except Exception as e:
+        log.warning(f"Injuries sheet fetch failed: {e}")
+        return None
+
+    reader = list(csv.reader(io.StringIO(resp.text)))
+    if len(reader) < 2:
+        return None
+
+    # Cols 17-23: Team, Player, _, Status, Injury, Date, GameStatus
+    teams = {}
+    for row_idx in range(1, len(reader)):
+        row = reader[row_idx]
+        if len(row) < 24:
+            continue
+
+        team = row[17].strip()
+        player = row[18].strip()
+        status = row[20].strip()
+        injury = row[21].strip()
+        date = row[22].strip()
+        game_status = row[23].strip()
+
+        if not team or not player:
+            continue
+        if not injury and status == "Available" and game_status == "Available":
+            continue
+        if game_status == "Available" and not injury:
+            continue
+
+        if team not in teams:
+            teams[team] = []
+
+        teams[team].append({
+            "name": player,
+            "status": game_status or status,
+            "injury": injury,
+            "date": date,
+            "salary": _player_salary_map.get(player, ""),
+            "country": _PLAYER_COUNTRY.get(player, ""),
+        })
+
+    if teams:
+        log.info(f"  Sheet injuries: {sum(len(v) for v in teams.values())} players across {len(teams)} teams")
+    return teams if teams else None
 
 
 @app.route("/api/injuries")
@@ -3994,21 +3848,8 @@ def _get_team_injuries(team_abbr):
     return result
 
 
-def _get_out_names(team_abbr):
-    """Return set of player names confirmed 'Out' for a team."""
-    out = set()
-    injuries = _get_team_injuries(team_abbr)
-    for inj in injuries:
-        if (inj.get("status") or "").lower() == "out":
-            out.add(inj["name"])
-            out.add(_normalize_name(inj["name"]))
-    return out
-
-
 def _build_matchups(away_abbr, home_abbr):
-    """Build position-by-position starter matchups for two teams.
-    Skips players confirmed Out and substitutes the next depth chart player.
-    """
+    """Build position-by-position starter matchups for two teams."""
     away_city = team_city(away_abbr)
     home_city = team_city(home_abbr)
     away_starters = _depth_starters.get(away_city, [])
@@ -4017,32 +3858,17 @@ def _build_matchups(away_abbr, home_abbr):
     if not away_starters or not home_starters:
         return []
 
-    away_out = _get_out_names(away_abbr)
-    home_out = _get_out_names(home_abbr)
-    away_pos_depth = _depth_by_pos.get(away_city, {})
-    home_pos_depth = _depth_by_pos.get(home_city, {})
-
-    def _pick_player(starters, out_names, pos_depth, pos):
-        """Pick first available (non-Out) player at a position."""
-        # First try the starter
-        starter = next((s for s in starters if s["pos"] == pos), None)
-        if starter and starter["name"] not in out_names and _normalize_name(starter["name"]) not in out_names:
-            return starter["name"]
-        # Starter is out — look through depth chart
-        for name in pos_depth.get(pos, []):
-            if name not in out_names and _normalize_name(name) not in out_names:
-                return name
-        return None
-
     matchups = []
     pos_order = ["PG", "SG", "SF", "PF", "C"]
 
     for pos in pos_order:
-        a_name = _pick_player(away_starters, away_out, away_pos_depth, pos)
-        h_name = _pick_player(home_starters, home_out, home_pos_depth, pos)
-        if not a_name or not h_name:
+        away_p = next((s for s in away_starters if s["pos"] == pos), None)
+        home_p = next((s for s in home_starters if s["pos"] == pos), None)
+        if not away_p or not home_p:
             continue
 
+        a_name = away_p["name"]
+        h_name = home_p["name"]
         a_rat = _get_rating(a_name) or 0
         h_rat = _get_rating(h_name) or 0
         a_stats = _find_stats(a_name)
@@ -4078,15 +3904,11 @@ def _get_hot_hand(away_abbr, home_abbr):
 
     for city, abbr in [(away_city, away_abbr), (home_city, home_abbr)]:
         starters = _depth_starters.get(city, [])
-        out_names = _get_out_names(abbr)
         for s in starters:
             name = s["name"]
-            if name in out_names or _normalize_name(name) in out_names:
-                continue
             r7 = _player_rating_7d.get(name)
             rs = _player_rating_season.get(name) or _get_rating(name)
             if r7 and rs and r7 > rs + 2.0:  # At least +2.0 surge
-                st = _find_stats(name)
                 hot.append({
                     "name": name,
                     "team": city,
@@ -4094,9 +3916,6 @@ def _get_hot_hand(away_abbr, home_abbr):
                     "rating7d": round(r7, 1),
                     "ratingSeason": round(rs, 1),
                     "diff": round(r7 - rs, 1),
-                    "pts": round(float(st.get("PTS", 0) or 0), 1),
-                    "reb": round(float(st.get("REB", 0) or 0), 1),
-                    "ast": round(float(st.get("AST", 0) or 0), 1),
                 })
     # Sort by biggest surge
     hot.sort(key=lambda x: x["diff"], reverse=True)
@@ -4120,14 +3939,14 @@ def fetch_game_previews():
     except Exception:
         games = []
 
-    # Only preview SCHEDULED games (not started/finished)
-    # If all today's games are done, look for next day's games
-    preview_games = [g for g in games if g.get("away", {}).get("abbr") and g.get("status") == "scheduled"]
+    # Use ALL today's games for previews (scheduled, live, or final)
+    # Only fall back to upcoming when there are literally no games today
+    preview_games = [g for g in games if g.get("away", {}).get("abbr")]
     upcoming_label = ""
 
     if not preview_games:
-        # No scheduled games left in scoreboard — get today's/upcoming from full schedule
-        log.info("Game previews: no scheduled games in scoreboard, checking full schedule...")
+        # No games today at all — get next day's games
+        log.info("Game previews: no games today, looking for upcoming...")
         upcoming = _get_upcoming_games()
         if upcoming:
             preview_games = upcoming
@@ -4222,41 +4041,6 @@ def fetch_game_previews():
         away_injuries = _get_team_injuries(away_abbr)
         home_injuries = _get_team_injuries(home_abbr)
 
-        # Calculate salary of players confirmed Out and attach per-player salary
-        def _lookup_salary_raw(name):
-            """Fuzzy salary lookup matching."""
-            raw = _player_salary_raw.get(name, 0)
-            if raw:
-                return raw
-            raw = _player_salary_raw.get(_normalize_name(name), 0)
-            if raw:
-                return raw
-            # Try full_name_map (abbreviated → full)
-            for abbr, full in _full_name_map.items():
-                if full == name or full == _normalize_name(name):
-                    raw = _player_salary_raw.get(abbr, 0)
-                    if raw:
-                        return raw
-            # Try last name match
-            parts = name.split()
-            if len(parts) >= 2:
-                last = parts[-1]
-                for k, v in _player_salary_raw.items():
-                    if k.split()[-1] == last and k.split()[0][0] == parts[0][0]:
-                        return v
-            return 0
-
-        def _injury_salary_total(injuries):
-            total = 0
-            for inj in injuries:
-                raw = _lookup_salary_raw(inj["name"])
-                inj["salary"] = raw  # attach to each injury entry
-                if (inj.get("status") or "").lower() == "out":
-                    total += raw
-            return total
-        away_out_salary = _injury_salary_total(away_injuries)
-        home_out_salary = _injury_salary_total(home_injuries)
-
         # Hot hand
         hot_hand = _get_hot_hand(away_abbr, home_abbr)
 
@@ -4304,7 +4088,7 @@ def fetch_game_previews():
                 ps = _player_full_stats.get(s["name"], {})
                 if ps:
                     leaders.append({
-                        "name": s["name"],  # Full name
+                        "name": s["name"].split()[-1],  # Last name only
                         "pts": round(float(ps.get("PTS", 0) or 0), 1),
                         "reb": round(float(ps.get("REB", 0) or 0), 1),
                         "ast": round(float(ps.get("AST", 0) or 0), 1),
@@ -4340,7 +4124,6 @@ def fetch_game_previews():
                 "homeRec": away_espn.get("home", "") or away_st.get("home", ""),
                 "roadRec": away_road,
                 "injuries": away_injuries,
-                "outSalary": away_out_salary,
                 "ortg": away_adv.get("ortg", 0),
                 "drtg": away_adv.get("drtg", 0),
                 "netRtg": away_adv.get("netRtg", 0),
@@ -4365,7 +4148,6 @@ def fetch_game_previews():
                 "homeRec": home_home,
                 "roadRec": home_espn.get("road", "") or home_st.get("road", ""),
                 "injuries": home_injuries,
-                "outSalary": home_out_salary,
                 "ortg": home_adv.get("ortg", 0),
                 "drtg": home_adv.get("drtg", 0),
                 "netRtg": home_adv.get("netRtg", 0),
@@ -4415,7 +4197,7 @@ _CAT_LABELS = {"PTS": "Points", "REB": "Rebounds", "AST": "Assists",
 
 # All-time leaderboards — Google Sheet is primary source
 _alltime_boards = {}  # cat -> [(name, career_total, is_active), ...] sorted desc
-_alltime_cache = TTLCache(maxsize=1, ttl=14400)  # 4 hours
+_alltime_cache = TTLCache(maxsize=1, ttl=3600)  # 1 hour
 _ALLTIME_DISK_CACHE = os.path.join(os.path.dirname(__file__), "alltime_leaders_cache.json")
 _ALLTIME_SHEET_ID = "1Q1DgQJipIFWjcnqIX3s4sHkLb2dhS_hjmFOP0mreqgA"
 _ALLTIME_GID = "0"
@@ -4764,7 +4546,7 @@ def _load_fallback_boards():
     log.info(f"Hardcoded fallback loaded: {list(_alltime_boards.keys())}")
 
 
-milestone_cache = TTLCache(maxsize=1, ttl=3600)  # 1 hour
+milestone_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min
 last_good_milestones = {"screens": []}
 
 
@@ -4879,8 +4661,8 @@ def _calculate_milestones():
     for cat in MILESTONE_CATS:
         upcoming_by_cat[cat] = dedup(upcoming_by_cat[cat])
 
-    # Sort: recently passed by smallest gap first (most recent passings), then by rank
-    recently_passed.sort(key=lambda x: (x["gap"], x["myRank"]))
+    # Sort: most recent passings first (fewest games ago = gap / perGame)
+    recently_passed.sort(key=lambda x: (x["gap"] / x["perGame"] if x["perGame"] > 0 else 999, x["myRank"]))
     for cat in MILESTONE_CATS:
         upcoming_by_cat[cat].sort(key=lambda x: x["gamesNeeded"])
 
@@ -4889,13 +4671,13 @@ def _calculate_milestones():
         log.info(f"  Approaching {cat}: {len(upcoming_by_cat[cat])} items")
 
     # Build screens
-    source_note = "Career totals + current season averages × GP"
+    source_note = ""
     screens = []
     per_screen = 8
 
     # Screen(s) for recently passed (all 5 cats mixed, max 2 screens)
     if recently_passed:
-        capped = recently_passed[:8]  # max 8 items per screen = most notable recent passings
+        capped = recently_passed[:8]  # max 8 items per screen
         screens.append({
             "isMilestone": True,
             "title": "Career Milestones — Recently Passed",
@@ -4972,205 +4754,173 @@ def _background_alltime_retry():
 # DEPTH CHARTS (Google Sheets)
 # ═══════════════════════════════════════
 
-_DEPTH_ORDER_URL = "https://raw.githubusercontent.com/aderoa/DepthCharts/main/order.json"
-_DEPTH_ROSTER_SHEET_ID = "2PACX-1vSg6im6IYB6HXMGzQbmmBnLw9SfQLzxCSo8OfChxlJLhsB6BBCO0wPF_TMch0YgAbtFqYkwDWrsxRe7"
-_DEPTH_ROSTER_GID = "0"
+_DEPTH_SHEET_ID = "14TQPdQ9mDhHMMMQa5vcs0coL98ZloHORtYElDikKoWY"
+_DEPTH_GID = "24771201"
 
 depth_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min
 last_good_depth = []
 
 _POSITIONS = ["PG", "SG", "SF", "PF", "C"]
+_MAX_LEVELS = 10  # effectively unlimited
 _TEAMS_PER_SCREEN = 2
 
-# Abbrev → full city name for depth chart headers
-_ABBREV_TO_CITY = {
-    "ATL": "Atlanta", "BOS": "Boston", "BKN": "Brooklyn", "CHA": "Charlotte",
-    "CHI": "Chicago", "CLE": "Cleveland", "DAL": "Dallas", "DEN": "Denver",
-    "DET": "Detroit", "GSW": "Golden State", "HOU": "Houston", "IND": "Indiana",
-    "LAC": "LA Clippers", "LAL": "LA Lakers", "MEM": "Memphis", "MIA": "Miami",
-    "MIL": "Milwaukee", "MIN": "Minnesota", "NOP": "New Orleans", "NYK": "New York",
-    "OKC": "Oklahoma City", "ORL": "Orlando", "PHI": "Philadelphia", "PHX": "Phoenix",
-    "POR": "Portland", "SAC": "Sacramento", "SAS": "San Antonio", "TOR": "Toronto",
-    "UTA": "Utah", "WAS": "Washington",
-}
+# Teams appear alphabetically in the depth chart sheet
+_NBA_TEAMS_ALPHA = [
+    "Atlanta Hawks", "Boston Celtics", "Brooklyn Nets", "Charlotte Hornets",
+    "Chicago Bulls", "Cleveland Cavaliers", "Dallas Mavericks", "Denver Nuggets",
+    "Detroit Pistons", "Golden State Warriors", "Houston Rockets", "Indiana Pacers",
+    "LA Clippers", "Los Angeles Lakers", "Memphis Grizzlies", "Miami Heat",
+    "Milwaukee Bucks", "Minnesota Timberwolves", "New Orleans Pelicans", "New York Knicks",
+    "Oklahoma City Thunder", "Orlando Magic", "Philadelphia 76ers", "Phoenix Suns",
+    "Portland Trail Blazers", "Sacramento Kings", "San Antonio Spurs", "Toronto Raptors",
+    "Utah Jazz", "Washington Wizards",
+]
 
 
 def fetch_depth():
-    """Fetch depth chart data from GitHub order.json + roster CSV."""
+    """Fetch depth chart data from Google Sheet, packed 3 teams per screen."""
     global last_good_depth
 
     if "depth" in depth_cache:
         return depth_cache["depth"]
 
-    # 1. Fetch order.json from GitHub
-    log.info("Fetching depth chart order from GitHub...")
-    try:
-        resp = requests.get(_DEPTH_ORDER_URL, timeout=15)
-        resp.raise_for_status()
-        order_data = resp.json()  # {"BOS": {"PG": ["name1", ...], ...}, ...}
-    except Exception as e:
-        log.warning(f"Depth chart order.json fetch failed: {e}")
-        return last_good_depth
-
-    if not order_data:
-        log.warning("Depth chart order.json: empty")
-        return last_good_depth
-
-    # 2. Fetch roster CSV for player details (team, salary, position, headshot)
-    roster_url = (
-        f"https://docs.google.com/spreadsheets/d/e/{_DEPTH_ROSTER_SHEET_ID}"
-        f"/pub?gid={_DEPTH_ROSTER_GID}&single=true&output=csv"
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{_DEPTH_SHEET_ID}"
+        f"/export?format=csv&gid={_DEPTH_GID}"
     )
-    log.info("Fetching depth chart roster CSV...")
+    log.info("Fetching depth charts from Google Sheet...")
+
     try:
-        resp = requests.get(roster_url, timeout=15)
+        resp = requests.get(csv_url, timeout=30)
         resp.raise_for_status()
         resp.encoding = 'utf-8'
     except Exception as e:
-        log.warning(f"Depth chart roster CSV fetch failed: {e}")
+        log.warning(f"Depth charts fetch failed: {e}")
         return last_good_depth
 
+    import re
     reader = list(csv.reader(io.StringIO(resp.text)))
-    if len(reader) < 2:
-        log.warning("Depth chart roster CSV: too few rows")
+    if len(reader) < 5:
         return last_good_depth
 
-    # Parse roster header
-    header = [h.strip().upper() for h in reader[0]]
-    def col(name):
-        return next((i for i, h in enumerate(header) if h == name), -1)
+    # Find header rows (PG/SG/SF/PF/C) to delimit team blocks
+    header_rows = []
+    pos_set_detect = {"PG", "SG", "SF", "PF", "C"}
+    for ri, row in enumerate(reader):
+        if len(row) >= 5:
+            cols = [row[i].strip() for i in range(5)]
+            if all(c in pos_set_detect for c in cols):
+                header_rows.append(ri)
 
-    PI, TI, SI = col("PLAYER"), col("TEAM"), col("2026")
-    POI, HI = col("POSITION"), col("HEADSHOT")
-    STI = col("ST 25-26")  # Contract status (GUARANTEED, TWO-WAY, 10-DAY)
+    log.info(f"Depth charts: found {len(header_rows)} header rows (salary lookup: {len(_salary_team_lookup)} players, name maps: {len(_full_name_map)} abbrevs, {len(_last_name_map)} last names)")
 
-    if PI < 0 or TI < 0:
-        log.warning("Depth chart roster CSV: missing PLAYER or TEAM column")
-        return last_good_depth
-
-    # Build player lookup
-    player_map = {}  # name → {team, salary, position, headshot, contractStatus}
-    for row in reader[1:]:
-        if len(row) <= max(PI, TI):
-            continue
-        name = row[PI].strip()
-        team = row[TI].strip()
-        if not name or not team:
-            continue
-        sal_raw = row[SI].replace("$", "").replace(",", "").strip() if SI >= 0 and SI < len(row) else "0"
-        salary = int(sal_raw) if sal_raw.isdigit() else 0
-        pos = row[POI].strip() if POI >= 0 and POI < len(row) else "SF"
-        headshot = row[HI].strip() if HI >= 0 and HI < len(row) else ""
-        contract = row[STI].strip() if STI >= 0 and STI < len(row) else "GUARANTEED"
-        player_map[name] = {
-            "team": team, "salary": salary, "position": pos,
-            "headshot": headshot, "contractStatus": contract,
-        }
-
-    log.info(f"Depth chart roster: {len(player_map)} players from CSV")
-
-    # 3. Build depth charts from order.json (row-based)
     all_teams = []
-    for team_abbr in sorted(order_data.keys()):
-        team_order = order_data[team_abbr]
-        city = _ABBREV_TO_CITY.get(team_abbr, team_abbr)
+    pos_set = set(_POSITIONS)  # {"PG", "SG", "SF", "PF", "C"}
+    for hi, hrow in enumerate(header_rows):
+        end = header_rows[hi + 1] if hi + 1 < len(header_rows) else len(reader)
+        # Read actual position labels from this header row (but force standard for display)
+        # Memphis has PF/PF instead of PF/C, but structurally col 5 is always the center
 
-        # For each position, walk the ordered list
-        # __SEPARATOR__ marks transition from active → out/injured
-        active_by_pos = {}   # pos → [player_entry, ...]
-        out_by_pos = {}      # pos → [player_entry, ...]
-        for pos in _POSITIONS:
-            names = team_order.get(pos, [])
-            active_by_pos[pos] = []
-            out_by_pos[pos] = []
-            past_sep = False
-            for name in names:
-                if name == "__SEPARATOR__":
-                    past_sep = True
-                    continue
-                if name == "__SPACER__":
-                    continue
-                info = player_map.get(name, {})
-                if not info:
-                    # Try case-insensitive match
-                    for pn, pi in player_map.items():
-                        if pn.lower() == name.lower():
-                            info = pi
-                            break
-                if not info:
-                    continue
-                sal = info.get("salary", 0) or _player_salary_raw.get(name, 0)
-                sal_str = f"${sal:,}" if sal > 0 else (_player_salary_map.get(name, "") or "")
-
-                is_out = name in _out_players
-                is_quest = name in _questionable_players
-
-                player_entry = {
-                    "pos": pos,
-                    "name": name,
-                    "salary": sal_str,
-                    "country": _PLAYER_COUNTRY.get(name, ""),
-                    "questionable": is_quest,
-                    "out": is_out,
-                }
-
-                # Below separator OR confirmed Out by injury data → out section
-                if past_sep or is_out:
-                    out_by_pos[pos].append(player_entry)
-                else:
-                    active_by_pos[pos].append(player_entry)
-
-        # Build row-based levels
-        max_active = max((len(active_by_pos[pos]) for pos in _POSITIONS), default=0)
-        max_out = max((len(out_by_pos[pos]) for pos in _POSITIONS), default=0)
-
+        # Parse depth levels: pairs of (name_row, salary_row)
         levels = []
-        for row_idx in range(max_active):
-            label = "Starters" if row_idx == 0 else "Bench" if row_idx == 1 else f"Reserve"
-            level = {"label": label, "players": []}
-            for pos in _POSITIONS:
-                if row_idx < len(active_by_pos[pos]):
-                    level["players"].append(active_by_pos[pos][row_idx])
-            if level["players"]:
-                levels.append(level)
+        ri = hrow + 1
+        while ri < end and len(levels) < _MAX_LEVELS:
+            row = reader[ri] if ri < len(reader) else []
+            if len(row) < 5:
+                ri += 1
+                continue
+            cols = [row[i].strip() if i < len(row) else "" for i in range(5)]
+            if not any(cols):
+                ri += 1
+                continue
+            # Detect next team's position header row
+            if all(c in pos_set_detect for c in cols):
+                break
 
-        for row_idx in range(max_out):
-            level = {"label": "Out", "players": []}
-            for pos in _POSITIONS:
-                if row_idx < len(out_by_pos[pos]):
-                    level["players"].append(out_by_pos[pos][row_idx])
-            if level["players"]:
-                levels.append(level)
+            is_salary = any(c.startswith("$") for c in cols if c)
+            if not is_salary and any(cols):
+                names = cols
+                salaries = ["", "", "", "", ""]
+                if ri + 1 < end:
+                    next_row = reader[ri + 1] if ri + 1 < len(reader) else []
+                    next_cols = [next_row[j].strip() if j < len(next_row) else "" for j in range(5)]
+                    if any(c.startswith("$") for c in next_cols if c):
+                        salaries = next_cols
+                        ri += 1
+
+                level_idx = len(levels)
+                label = "Starters" if level_idx == 0 else "Bench" if level_idx == 1 else "Out"
+                level = {"label": label, "players": []}
+                for pi in range(5):
+                    if names[pi]:
+                        full_name = resolve_player_name(names[pi])
+                        level["players"].append({
+                            "pos": _POSITIONS[pi],
+                            "name": full_name,
+                            "salary": salaries[pi],
+                            "country": _PLAYER_COUNTRY.get(full_name, _PLAYER_COUNTRY.get(names[pi], "")),
+                            "questionable": full_name in _questionable_players,
+                        })
+                if level["players"]:
+                    levels.append(level)
+
+            ri += 1
 
         if levels:
-            all_teams.append({"name": city, "levels": levels})
+            # Identify team by looking up player names in salary data
+            team_votes = {}
+            unmatched = []
+            for level in levels:
+                for p in level["players"]:
+                    t = _salary_team_lookup.get(p["name"], "")
+                    if t:
+                        team_votes[t] = team_votes.get(t, 0) + 1
+                    else:
+                        unmatched.append(p["name"])
+            if team_votes:
+                team_name = max(team_votes, key=team_votes.get)
+            else:
+                team_name = f"Unknown Team {hi + 1}"
+            if unmatched:
+                log.info(f"  Block {hi}: {team_name} ({team_votes.get(team_name,0)} votes, unmatched: {unmatched})")
+            else:
+                log.info(f"  Block {hi}: {team_name} ({team_votes.get(team_name,0)} votes, all matched)")
+            all_teams.append({"name": team_name, "levels": levels})
 
-    # Sort teams alphabetically
+    # Sort teams alphabetically for display
     all_teams.sort(key=lambda t: t["name"])
 
-    # 4. Build cross-reference maps for other features
+    # Build player→team cross-reference for team ratings
     _player_team_map.clear()
     _player_position_map.clear()
     _depth_starters.clear()
-    _depth_by_pos.clear()
     for t in all_teams:
-        pos_depth = {}
+        if t["name"].startswith("Unknown"):
+            continue  # Don't pollute map with unidentified teams
         for level in t["levels"]:
             for p in level["players"]:
                 _player_team_map[p["name"]] = t["name"]
+                # Populate position for ALL players (not just starters)
+                # First occurrence wins (starters come first, so their position takes priority)
                 if p["name"] not in _player_position_map:
                     _player_position_map[p["name"]] = p["pos"]
-                pos_depth.setdefault(p["pos"], []).append(p["name"])
-        _depth_by_pos[t["name"]] = pos_depth
+        # Populate starters (first level) — used for tonight's matchup logic
         if t["levels"]:
             starters = t["levels"][0]["players"]
             _depth_starters[t["name"]] = [{"name": p["name"], "pos": p["pos"]} for p in starters]
 
     log.info(f"  Position map: {len(_player_position_map)} players (starters: {sum(len(v) for v in _depth_starters.values())})")
-    team_names = [t["name"] for t in all_teams]
-    log.info(f"Depth charts: {len(all_teams)} teams from order.json: {team_names[:10]}...")
 
-    # 5. Pack into screens
+    # Log all identified teams
+    team_names = [t["name"] for t in all_teams]
+    log.info(f"Depth charts: {len(all_teams)} teams identified: {team_names}")
+    has_memphis = any("emphis" in n for n in team_names)
+    log.info(f"Memphis present: {has_memphis}")
+    if not has_memphis:
+        # Log all vote results for debugging
+        log.warning("Memphis NOT found! Check team votes above.")
+
+    # Pack teams into screens
     screens = []
     for i in range(0, len(all_teams), _TEAMS_PER_SCREEN):
         batch = all_teams[i:i + _TEAMS_PER_SCREEN]
@@ -5191,15 +4941,14 @@ def fetch_depth():
 @app.route("/api/depth")
 def api_depth():
     """Return depth chart screens (multiple teams per screen).
-    Overlays questionable/out flags from current injury data."""
+    Overlays questionable flags from current injury data."""
     data = fetch_depth()
-    # Dynamically apply injury flags from latest data
+    # Dynamically apply questionable flags from latest injury data
     for screen in data:
         for team in screen.get("teams", []):
             for level in team.get("levels", []):
                 for p in level.get("players", []):
                     p["questionable"] = p["name"] in _questionable_players
-                    p["out"] = p["name"] in _out_players
     return jsonify({"screens": data, "count": len(data)})
 
 
@@ -5378,11 +5127,6 @@ def _prewarm_caches():
         log.warning(f"Pre-warm salaries failed: {e}")
 
     try:
-        fetch_injuries()  # Must be before depth — populates _questionable_players, _out_players
-    except Exception as e:
-        log.warning(f"Pre-warm injuries failed: {e}")
-
-    try:
         fetch_depth()  # Must be before ratings/comparisons — populates _player_team_map
     except Exception as e:
         log.warning(f"Pre-warm depth charts failed: {e}")
@@ -5394,6 +5138,11 @@ def _prewarm_caches():
         fetch_ratings()  # Needs _player_team_map for team names
     except Exception as e:
         log.warning(f"Pre-warm ratings failed: {e}")
+
+    try:
+        fetch_injuries()
+    except Exception as e:
+        log.warning(f"Pre-warm injuries failed: {e}")
 
     try:
         fetch_team_ratings()
@@ -5429,12 +5178,6 @@ def _prewarm_caches():
         fetch_advanced_stats()
     except Exception as e:
         log.warning(f"Pre-warm advanced stats failed: {e}")
-
-    # Bridge: fill gaps in _player_full_stats from team ratings
-    try:
-        _bridge_player_stats()
-    except Exception as e:
-        log.warning(f"Pre-warm bridge failed: {e}")
 
     try:
         fetch_comparisons()

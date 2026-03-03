@@ -1211,9 +1211,7 @@ def fetch_ratings():
 
             rat = row[start_col + 1].strip() if start_col + 1 < len(row) else ""
             country = _PLAYER_COUNTRY.get(name, "")
-            team = _player_team_map.get(name, "")
-            if team.lower().startswith("unknown"):
-                team = ""
+            team = team_city(_player_team_map.get(name, ""))
 
             if is_form:
                 # Cols: PLAYER, RAT (current), 2024-25 (old), DIFF
@@ -2876,6 +2874,7 @@ _INJURIES_JSON_URL = "https://aderoa.github.io/Injuries/injuries.json"
 injuries_cache = TTLCache(maxsize=1, ttl=900)  # 15 min
 last_good_injuries = []
 _questionable_players = set()  # Players with Questionable/Doubtful/Game Time Decision status
+_out_players = set()           # Players with Out status
 
 
 def fetch_injuries():
@@ -2957,18 +2956,24 @@ def fetch_injuries():
     # Build screens from teams dict
     MAX_PER_COL = 14
 
-    # Update global questionable set for depth chart cross-reference
+    # Update global questionable/out sets for depth chart cross-reference
     _questionable_players.clear()
+    _out_players.clear()
     for team_name, team_players in teams.items():
         for p in team_players:
             st = (p["status"] or "").lower()
+            raw_name = p["name"]
+            resolved = resolve_player_name(raw_name)
             if st in ("questionable", "doubtful", "game time decision", "day-to-day"):
-                raw_name = p["name"]
                 _questionable_players.add(raw_name)
-                resolved = resolve_player_name(raw_name)
                 if resolved != raw_name:
                     _questionable_players.add(resolved)
+            elif st == "out":
+                _out_players.add(raw_name)
+                if resolved != raw_name:
+                    _out_players.add(resolved)
     log.info(f"  Questionable/Doubtful players: {len(_questionable_players)} — {list(_questionable_players)[:10]}")
+    log.info(f"  Out players: {len(_out_players)} — {list(_out_players)[:10]}")
 
     # First build a flat list of team blocks (header + players)
     team_blocks = []
@@ -4781,15 +4786,16 @@ def fetch_depth():
     _player_position_map.clear()
     _depth_starters.clear()
     for t in all_teams:
+        city = team_city(t["name"])  # "Boston Celtics" → "Boston"
         for level in t["levels"]:
             for p in level["players"]:
                 _player_team_map[p["name"]] = t["name"]
                 if p["name"] not in _player_position_map:
                     _player_position_map[p["name"]] = p["pos"]
-        # Populate starters (first level)
+        # Populate starters (first level) — keyed by city name for preview lookups
         if t["levels"]:
             starters = t["levels"][0]["players"]
-            _depth_starters[t["name"]] = [{"name": p["name"], "pos": p["pos"]} for p in starters]
+            _depth_starters[city] = [{"name": p["name"], "pos": p["pos"]} for p in starters]
 
     log.info(f"  Position map: {len(_player_position_map)} players (starters: {sum(len(v) for v in _depth_starters.values())})")
     team_names = [t["name"] for t in all_teams]
@@ -4818,12 +4824,13 @@ def api_depth():
     """Return depth chart screens (multiple teams per screen).
     Overlays questionable flags from current injury data."""
     data = fetch_depth()
-    # Dynamically apply questionable flags from latest injury data
+    # Dynamically apply questionable/out flags from latest injury data
     for screen in data:
         for team in screen.get("teams", []):
             for level in team.get("levels", []):
                 for p in level.get("players", []):
                     p["questionable"] = p["name"] in _questionable_players
+                    p["out"] = p["name"] in _out_players
     return jsonify({"screens": data, "count": len(data)})
 
 

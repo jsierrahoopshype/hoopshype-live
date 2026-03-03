@@ -2866,143 +2866,88 @@ def api_comparisons():
 
 _INJURIES_SHEET_ID = "14TQPdQ9mDhHMMMQa5vcs0coL98ZloHORtYElDikKoWY"
 _INJURIES_GID = "306285159"
-_INJURIES_JSON_URL = "https://raw.githubusercontent.com/aderoa/Injuries/main/injuries.json"
+_INJURIES_JSON_URL = "https://aderoa.github.io/Injuries/injuries.json"
 
 injuries_cache = TTLCache(maxsize=1, ttl=900)  # 15 min
 last_good_injuries = []
 _questionable_players = set()  # Players with Questionable/Doubtful/Game Time Decision status
 
 
-def _fetch_injuries_from_github():
-    """Fetch injury data from GitHub JSON (primary source, kept current by admin tool)."""
-    log.info("Fetching injury reports from GitHub JSON...")
-    try:
-        resp = requests.get(_INJURIES_JSON_URL, timeout=30)
-        resp.raise_for_status()
-        entries = resp.json()
-        if not entries or len(entries) < 5:
-            log.warning(f"GitHub injuries JSON too short ({len(entries) if entries else 0} entries)")
-            return None
-        log.info(f"  GitHub injuries: {len(entries)} entries")
-
-        # Build latest status per player (last entry wins)
-        latest = {}
-        for e in entries:
-            player = e.get("player", "").strip()
-            if not player:
-                continue
-            latest[player] = {
-                "status": e.get("status", ""),
-                "injury": e.get("injury", ""),
-                "date": e.get("date", ""),
-            }
-
-        # Group by team using _player_team_map
-        teams = {}
-        for player, info in latest.items():
-            status = info["status"]
-            injury = info["injury"]
-            # Skip healthy/available players
-            if status.lower() in ("available", "") and not injury:
-                continue
-
-            # Look up team from depth chart map
-            team = _player_team_map.get(player, "")
-            if not team:
-                # Try case-insensitive partial match
-                player_lower = player.lower()
-                for k, v in _player_team_map.items():
-                    if k.lower() == player_lower:
-                        team = v
-                        break
-            if not team:
-                team = "Unknown"
-
-            if team not in teams:
-                teams[team] = []
-            teams[team].append({
-                "name": player,
-                "status": status,
-                "injury": injury,
-                "date": info["date"],
-                "salary": _player_salary_map.get(player, ""),
-                "country": _PLAYER_COUNTRY.get(player, ""),
-            })
-
-        if not teams:
-            log.warning("GitHub injuries: no teams found after processing")
-            return None
-
-        log.info(f"  GitHub injuries: {sum(len(v) for v in teams.values())} injured players across {len(teams)} teams")
-        return teams
-    except Exception as e:
-        log.warning(f"GitHub injuries fetch failed: {e}")
-        return None
-
-
 def fetch_injuries():
-    """Fetch injury report data. Primary: GitHub JSON. Fallback: Google Sheet."""
+    """Fetch injury report data from GitHub JSON (primary) with team lookup from depth charts."""
     global last_good_injuries
 
     if "injuries" in injuries_cache:
         return injuries_cache["injuries"]
 
-    # Try GitHub JSON first (most current source)
-    teams = _fetch_injuries_from_github()
-
-    # Fallback to Google Sheet if GitHub failed
-    if teams is None:
-        teams = _fetch_injuries_from_sheet()
-
-    if not teams:
-        return last_good_injuries
+    log.info("Fetching injury reports from GitHub JSON...")
 
     try:
-        resp = requests.get(csv_url, timeout=30)
+        resp = requests.get(_INJURIES_JSON_URL, timeout=20)
         resp.raise_for_status()
-        resp.encoding = 'utf-8'
+        entries = resp.json()
     except Exception as e:
-        log.warning(f"Injuries fetch failed: {e}")
+        log.warning(f"GitHub injuries fetch failed: {e}")
         return last_good_injuries
 
-    reader = list(csv.reader(io.StringIO(resp.text)))
-    if len(reader) < 2:
+    if not entries:
+        log.warning("GitHub injuries JSON empty")
         return last_good_injuries
 
-    # Cols 17-23: Team, Player, _, Status, Injury, Date, GameStatus
-    teams = {}  # team -> [players]
-    for row_idx in range(1, len(reader)):
-        row = reader[row_idx]
-        if len(row) < 24:
+    # Build latest status per player (last entry wins, chronological order)
+    latest = {}
+    for e in entries:
+        player = e.get("player", "").strip()
+        if not player:
             continue
+        latest[player] = {
+            "status": e.get("status", ""),
+            "injury": e.get("injury", ""),
+            "date": e.get("date", ""),
+        }
 
-        team = row[17].strip()
-        player = row[18].strip()
-        status = row[20].strip()       # Out, Available
-        injury = row[21].strip()       # Injury description
-        date = row[22].strip()         # Date
-        game_status = row[23].strip()  # Out, Questionable, Probable
+    log.info(f"  GitHub injuries: {len(latest)} unique players from {len(entries)} entries")
 
-        if not team or not player:
-            continue
-        # Skip fully healthy players
-        if not injury and status == "Available" and game_status == "Available":
-            continue
-        # Skip "Available" game status with no injury note
-        if game_status == "Available" and not injury:
+    # Group by team using _player_team_map (from depth charts)
+    teams = {}
+    unmatched = []
+    for player, info in latest.items():
+        status = info["status"].strip()
+        injury = info["injury"].strip()
+
+        # Skip healthy/available players
+        if status.lower() in ("available", ""):
+            if not injury:
+                continue
+
+        # Look up team
+        team = _player_team_map.get(player, "")
+        if not team:
+            # Try resolve_player_name for alternate spellings
+            resolved = resolve_player_name(player)
+            if resolved != player:
+                team = _player_team_map.get(resolved, "")
+        if not team:
+            unmatched.append(player)
             continue
 
         if team not in teams:
             teams[team] = []
-
         teams[team].append({
             "name": player,
-            "status": game_status or status,
+            "status": status,
             "injury": injury,
-            "date": date,
+            "date": info["date"],
             "salary": _player_salary_map.get(player, ""),
             "country": _PLAYER_COUNTRY.get(player, ""),
         })
+
+    if unmatched:
+        log.info(f"  Injuries: {len(unmatched)} players not matched to teams: {unmatched[:15]}")
+
+    if not teams:
+        log.warning("Injuries: no teams found — depth charts may not be loaded yet")
+        return last_good_injuries
 
     # Build screens from teams dict
     MAX_PER_COL = 14
@@ -3023,8 +2968,6 @@ def fetch_injuries():
     # First build a flat list of team blocks (header + players)
     team_blocks = []
     for team_name in sorted(teams.keys()):
-        if team_name == "Unknown":
-            continue  # skip unknown teams
         team_players = teams[team_name]
         block = [{"isHeader": True, "team": team_name}]
         for p in team_players:
@@ -3064,64 +3007,6 @@ def fetch_injuries():
         log.info(f"Cached {len(screens)} injury screens ({total_injured} players across {len(teams)} teams)")
 
     return screens
-
-
-def _fetch_injuries_from_sheet():
-    """Fetch injury data from Google Sheet (fallback source). Returns teams dict or None."""
-    csv_url = (
-        f"https://docs.google.com/spreadsheets/d/{_INJURIES_SHEET_ID}"
-        f"/export?format=csv&gid={_INJURIES_GID}"
-    )
-    log.info("Fetching injury reports from Google Sheet (fallback)...")
-
-    try:
-        resp = requests.get(csv_url, timeout=30)
-        resp.raise_for_status()
-        resp.encoding = 'utf-8'
-    except Exception as e:
-        log.warning(f"Injuries sheet fetch failed: {e}")
-        return None
-
-    reader = list(csv.reader(io.StringIO(resp.text)))
-    if len(reader) < 2:
-        return None
-
-    # Cols 17-23: Team, Player, _, Status, Injury, Date, GameStatus
-    teams = {}
-    for row_idx in range(1, len(reader)):
-        row = reader[row_idx]
-        if len(row) < 24:
-            continue
-
-        team = row[17].strip()
-        player = row[18].strip()
-        status = row[20].strip()
-        injury = row[21].strip()
-        date = row[22].strip()
-        game_status = row[23].strip()
-
-        if not team or not player:
-            continue
-        if not injury and status == "Available" and game_status == "Available":
-            continue
-        if game_status == "Available" and not injury:
-            continue
-
-        if team not in teams:
-            teams[team] = []
-
-        teams[team].append({
-            "name": player,
-            "status": game_status or status,
-            "injury": injury,
-            "date": date,
-            "salary": _player_salary_map.get(player, ""),
-            "country": _PLAYER_COUNTRY.get(player, ""),
-        })
-
-    if teams:
-        log.info(f"  Sheet injuries: {sum(len(v) for v in teams.values())} players across {len(teams)} teams")
-    return teams if teams else None
 
 
 @app.route("/api/injuries")

@@ -2462,6 +2462,7 @@ def _build_comparison(name_a, name_b):
     # ADVANCED
     advanced = []
     advanced.append(_s("Rating", rat_a, rat_b, "1"))
+    advanced.append(_s("+/-", adv_a.get("PLUS_MINUS"), adv_b.get("PLUS_MINUS"), "s1"))
     advanced.append(_s("Net Rating", adv_a.get("NET_RATING"), adv_b.get("NET_RATING"), "s1"))
     sections.append({"label": "ADVANCED", "stats": advanced})
 
@@ -2613,6 +2614,10 @@ def fetch_comparisons():
 
     if not last_good_team_ratings:
         log.warning("Comparisons: team ratings not loaded yet, skipping")
+        return last_good_comparisons
+
+    if not _player_adv_stats:
+        log.warning("Comparisons: advanced stats not loaded yet, skipping")
         return last_good_comparisons
 
     screens = []
@@ -4641,6 +4646,7 @@ def _background_alltime_retry():
 
 _DEPTH_SHEET_ID = "14TQPdQ9mDhHMMMQa5vcs0coL98ZloHORtYElDikKoWY"
 _DEPTH_GID = "24771201"
+_DEPTH_JSON_URL = "https://aderoa.github.io/DepthCharts/order.json"
 
 depth_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min
 last_good_depth = []
@@ -4648,6 +4654,20 @@ last_good_depth = []
 _POSITIONS = ["PG", "SG", "SF", "PF", "C"]
 _MAX_LEVELS = 10  # effectively unlimited
 _TEAMS_PER_SCREEN = 2
+
+# Abbreviation → full team name
+_ABBR_TO_FULL = {
+    "ATL": "Atlanta Hawks", "BOS": "Boston Celtics", "BKN": "Brooklyn Nets",
+    "CHA": "Charlotte Hornets", "CHI": "Chicago Bulls", "CLE": "Cleveland Cavaliers",
+    "DAL": "Dallas Mavericks", "DEN": "Denver Nuggets", "DET": "Detroit Pistons",
+    "GSW": "Golden State Warriors", "HOU": "Houston Rockets", "IND": "Indiana Pacers",
+    "LAC": "LA Clippers", "LAL": "Los Angeles Lakers", "MEM": "Memphis Grizzlies",
+    "MIA": "Miami Heat", "MIL": "Milwaukee Bucks", "MIN": "Minnesota Timberwolves",
+    "NOP": "New Orleans Pelicans", "NYK": "New York Knicks", "OKC": "Oklahoma City Thunder",
+    "ORL": "Orlando Magic", "PHI": "Philadelphia 76ers", "PHX": "Phoenix Suns",
+    "POR": "Portland Trail Blazers", "SAC": "Sacramento Kings", "SAS": "San Antonio Spurs",
+    "TOR": "Toronto Raptors", "UTA": "Utah Jazz", "WAS": "Washington Wizards",
+}
 
 # Teams appear alphabetically in the depth chart sheet
 _NBA_TEAMS_ALPHA = [
@@ -4663,147 +4683,117 @@ _NBA_TEAMS_ALPHA = [
 
 
 def fetch_depth():
-    """Fetch depth chart data from Google Sheet, packed 3 teams per screen."""
+    """Fetch depth chart data from GitHub JSON, packed 2 teams per screen."""
     global last_good_depth
 
     if "depth" in depth_cache:
         return depth_cache["depth"]
 
-    csv_url = (
-        f"https://docs.google.com/spreadsheets/d/{_DEPTH_SHEET_ID}"
-        f"/export?format=csv&gid={_DEPTH_GID}"
-    )
-    log.info("Fetching depth charts from Google Sheet...")
+    log.info("Fetching depth charts from GitHub JSON...")
 
     try:
-        resp = requests.get(csv_url, timeout=30)
+        resp = requests.get(_DEPTH_JSON_URL, timeout=20)
         resp.raise_for_status()
-        resp.encoding = 'utf-8'
+        data = resp.json()
     except Exception as e:
-        log.warning(f"Depth charts fetch failed: {e}")
+        log.warning(f"Depth charts JSON fetch failed: {e}")
         return last_good_depth
 
-    import re
-    reader = list(csv.reader(io.StringIO(resp.text)))
-    if len(reader) < 5:
+    if not data or len(data) < 20:
+        log.warning(f"Depth charts JSON too small ({len(data) if data else 0} teams)")
         return last_good_depth
-
-    # Find header rows (PG/SG/SF/PF/C) to delimit team blocks
-    header_rows = []
-    pos_set_detect = {"PG", "SG", "SF", "PF", "C"}
-    for ri, row in enumerate(reader):
-        if len(row) >= 5:
-            cols = [row[i].strip() for i in range(5)]
-            if all(c in pos_set_detect for c in cols):
-                header_rows.append(ri)
-
-    log.info(f"Depth charts: found {len(header_rows)} header rows (salary lookup: {len(_salary_team_lookup)} players, name maps: {len(_full_name_map)} abbrevs, {len(_last_name_map)} last names)")
 
     all_teams = []
-    pos_set = set(_POSITIONS)  # {"PG", "SG", "SF", "PF", "C"}
-    for hi, hrow in enumerate(header_rows):
-        end = header_rows[hi + 1] if hi + 1 < len(header_rows) else len(reader)
-        # Read actual position labels from this header row (but force standard for display)
-        # Memphis has PF/PF instead of PF/C, but structurally col 5 is always the center
 
-        # Parse depth levels: pairs of (name_row, salary_row)
+    for abbr, positions in data.items():
+        team_name = _ABBR_TO_FULL.get(abbr, abbr)
+
+        # For each position, split players into active vs out (by __SEPARATOR__)
+        active_by_pos = {}  # pos -> [active players]
+        out_by_pos = {}     # pos -> [out players]
+
+        for pos in _POSITIONS:
+            players = positions.get(pos, [])
+            active = []
+            out = []
+            past_sep = False
+            for p in players:
+                if p == "__SEPARATOR__":
+                    past_sep = True
+                    continue
+                if p == "__SPACER__":
+                    continue
+                if past_sep:
+                    out.append(p)
+                else:
+                    active.append(p)
+            active_by_pos[pos] = active
+            out_by_pos[pos] = out
+
+        # Build levels by row depth across positions
+        # Level 0 = starters (first active player per position)
+        # Level 1 = bench (second active player per position)
+        # etc.
+        max_active = max(len(v) for v in active_by_pos.values()) if active_by_pos else 0
         levels = []
-        ri = hrow + 1
-        while ri < end and len(levels) < _MAX_LEVELS:
-            row = reader[ri] if ri < len(reader) else []
-            if len(row) < 5:
-                ri += 1
-                continue
-            cols = [row[i].strip() if i < len(row) else "" for i in range(5)]
-            if not any(cols):
-                ri += 1
-                continue
-            # Detect next team's position header row
-            if all(c in pos_set_detect for c in cols):
-                break
 
-            is_salary = any(c.startswith("$") for c in cols if c)
-            if not is_salary and any(cols):
-                names = cols
-                salaries = ["", "", "", "", ""]
-                if ri + 1 < end:
-                    next_row = reader[ri + 1] if ri + 1 < len(reader) else []
-                    next_cols = [next_row[j].strip() if j < len(next_row) else "" for j in range(5)]
-                    if any(c.startswith("$") for c in next_cols if c):
-                        salaries = next_cols
-                        ri += 1
+        for depth in range(max_active):
+            label = "Starters" if depth == 0 else "Bench" if depth == 1 else "Reserve"
+            level = {"label": label, "players": []}
+            for pos in _POSITIONS:
+                actives = active_by_pos.get(pos, [])
+                if depth < len(actives):
+                    raw_name = actives[depth]
+                    full_name = resolve_player_name(raw_name)
+                    level["players"].append({
+                        "pos": pos,
+                        "name": full_name,
+                        "salary": _player_salary_map.get(full_name, _player_salary_map.get(raw_name, "")),
+                        "country": _PLAYER_COUNTRY.get(full_name, _PLAYER_COUNTRY.get(raw_name, "")),
+                        "questionable": full_name in _questionable_players,
+                    })
+            if level["players"]:
+                levels.append(level)
 
-                level_idx = len(levels)
-                label = "Starters" if level_idx == 0 else "Bench" if level_idx == 1 else "Out"
-                level = {"label": label, "players": []}
-                for pi in range(5):
-                    if names[pi]:
-                        full_name = resolve_player_name(names[pi])
-                        level["players"].append({
-                            "pos": _POSITIONS[pi],
-                            "name": full_name,
-                            "salary": salaries[pi],
-                            "country": _PLAYER_COUNTRY.get(full_name, _PLAYER_COUNTRY.get(names[pi], "")),
-                            "questionable": full_name in _questionable_players,
-                        })
-                if level["players"]:
-                    levels.append(level)
-
-            ri += 1
+        # Out level — players after __SEPARATOR__
+        out_players = []
+        for pos in _POSITIONS:
+            for raw_name in out_by_pos.get(pos, []):
+                full_name = resolve_player_name(raw_name)
+                out_players.append({
+                    "pos": pos,
+                    "name": full_name,
+                    "salary": _player_salary_map.get(full_name, _player_salary_map.get(raw_name, "")),
+                    "country": _PLAYER_COUNTRY.get(full_name, _PLAYER_COUNTRY.get(raw_name, "")),
+                    "questionable": full_name in _questionable_players,
+                })
+        if out_players:
+            levels.append({"label": "Out", "players": out_players})
 
         if levels:
-            # Identify team by looking up player names in salary data
-            team_votes = {}
-            unmatched = []
-            for level in levels:
-                for p in level["players"]:
-                    t = _salary_team_lookup.get(p["name"], "")
-                    if t:
-                        team_votes[t] = team_votes.get(t, 0) + 1
-                    else:
-                        unmatched.append(p["name"])
-            if team_votes:
-                team_name = max(team_votes, key=team_votes.get)
-            else:
-                team_name = f"Unknown Team {hi + 1}"
-            if unmatched:
-                log.info(f"  Block {hi}: {team_name} ({team_votes.get(team_name,0)} votes, unmatched: {unmatched})")
-            else:
-                log.info(f"  Block {hi}: {team_name} ({team_votes.get(team_name,0)} votes, all matched)")
             all_teams.append({"name": team_name, "levels": levels})
 
-    # Sort teams alphabetically for display
+    # Sort teams alphabetically
     all_teams.sort(key=lambda t: t["name"])
 
-    # Build player→team cross-reference for team ratings
+    # Build player→team cross-reference
     _player_team_map.clear()
     _player_position_map.clear()
     _depth_starters.clear()
     for t in all_teams:
-        if t["name"].startswith("Unknown"):
-            continue  # Don't pollute map with unidentified teams
         for level in t["levels"]:
             for p in level["players"]:
                 _player_team_map[p["name"]] = t["name"]
-                # Populate position for ALL players (not just starters)
-                # First occurrence wins (starters come first, so their position takes priority)
                 if p["name"] not in _player_position_map:
                     _player_position_map[p["name"]] = p["pos"]
-        # Populate starters (first level) — used for tonight's matchup logic
+        # Populate starters (first level)
         if t["levels"]:
             starters = t["levels"][0]["players"]
             _depth_starters[t["name"]] = [{"name": p["name"], "pos": p["pos"]} for p in starters]
 
     log.info(f"  Position map: {len(_player_position_map)} players (starters: {sum(len(v) for v in _depth_starters.values())})")
-
-    # Log all identified teams
     team_names = [t["name"] for t in all_teams]
     log.info(f"Depth charts: {len(all_teams)} teams identified: {team_names}")
-    has_memphis = any("emphis" in n for n in team_names)
-    log.info(f"Memphis present: {has_memphis}")
-    if not has_memphis:
-        # Log all vote results for debugging
-        log.warning("Memphis NOT found! Check team votes above.")
 
     # Pack teams into screens
     screens = []
@@ -5012,7 +5002,7 @@ def _prewarm_caches():
         log.warning(f"Pre-warm salaries failed: {e}")
 
     try:
-        fetch_depth()  # Must be before ratings/comparisons — populates _player_team_map
+        fetch_depth()  # Must be FIRST — populates _player_team_map for everything else
     except Exception as e:
         log.warning(f"Pre-warm depth charts failed: {e}")
 
@@ -5020,17 +5010,27 @@ def _prewarm_caches():
     ratings_cache.clear()
 
     try:
+        fetch_advanced_stats()  # Must be before comparisons — populates defense/clutch/hustle
+    except Exception as e:
+        log.warning(f"Pre-warm advanced stats failed: {e}")
+
+    try:
+        fetch_counting_stats()  # Must be before comparisons — populates counting stats
+    except Exception as e:
+        log.warning(f"Pre-warm counting stats failed: {e}")
+
+    try:
         fetch_ratings()  # Needs _player_team_map for team names
     except Exception as e:
         log.warning(f"Pre-warm ratings failed: {e}")
 
     try:
-        fetch_injuries()
+        fetch_injuries()  # Needs _player_team_map from depth charts
     except Exception as e:
         log.warning(f"Pre-warm injuries failed: {e}")
 
     try:
-        fetch_team_ratings()
+        fetch_team_ratings()  # Needs _player_team_map
     except Exception as e:
         log.warning(f"Pre-warm team ratings failed: {e}")
 
@@ -5038,11 +5038,6 @@ def _prewarm_caches():
         fetch_hist_salaries()
     except Exception as e:
         log.warning(f"Pre-warm historical salaries failed: {e}")
-
-    try:
-        fetch_counting_stats()
-    except Exception as e:
-        log.warning(f"Pre-warm counting stats failed: {e}")
 
     try:
         fetch_draft_classes()
@@ -5059,11 +5054,8 @@ def _prewarm_caches():
     except Exception as e:
         log.warning(f"Pre-warm value rankings failed: {e}")
 
-    try:
-        fetch_advanced_stats()
-    except Exception as e:
-        log.warning(f"Pre-warm advanced stats failed: {e}")
-
+    # Comparisons MUST come after: depth, advanced_stats, counting_stats, ratings, team_ratings
+    comparisons_cache.clear()
     try:
         fetch_comparisons()
     except Exception as e:

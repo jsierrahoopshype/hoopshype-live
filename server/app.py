@@ -2460,7 +2460,6 @@ def _build_comparison(name_a, name_b):
     # ADVANCED
     advanced = []
     advanced.append(_s("Rating", rat_a, rat_b, "1"))
-    advanced.append(_s("+/-", adv_a.get("PLUS_MINUS"), adv_b.get("PLUS_MINUS"), "s1"))
     advanced.append(_s("Net Rating", adv_a.get("NET_RATING"), adv_b.get("NET_RATING"), "s1"))
     sections.append({"label": "ADVANCED", "stats": advanced})
 
@@ -3983,7 +3982,7 @@ def fetch_game_previews():
                 ps = _player_full_stats.get(s["name"], {})
                 if ps:
                     leaders.append({
-                        "name": s["name"].split()[-1],  # Last name only
+                        "name": s["name"],  # Full name
                         "pts": round(float(ps.get("PTS", 0) or 0), 1),
                         "reb": round(float(ps.get("REB", 0) or 0), 1),
                         "ast": round(float(ps.get("AST", 0) or 0), 1),

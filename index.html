@@ -233,7 +233,8 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .sal-table-wrap::-webkit-scrollbar{display:none}
 .sal-table{width:100%;border-collapse:collapse;table-layout:fixed}
 .sal-th-player{width:210px}
-.sal-th-salary{width:110px;text-align:right;padding-right:var(--sp-1)}
+.sal-th-salary{width:110px;text-align:right}
+.stat-th{width:55px;text-align:left;padding-left:var(--sp-1)}
 .sal-th-bar{width:auto}
 .sal-th-status{width:120px}
 .sal-table thead th{font-family:var(--font-display);font-weight:600;font-size:12.5px;letter-spacing:1px;text-transform:uppercase;color:var(--text-tertiary);text-align:left;padding:1px var(--sp-1);border-bottom:1px solid var(--border-medium);background:var(--bg-panel)}
@@ -251,6 +252,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .hist-th-team{width:130px;text-align:left}
 .hist-team{font-family:var(--font-body);font-size:15px;color:var(--text-secondary);padding:0 var(--sp-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
 .sal-salary{font-family:var(--font-mono);font-weight:600;font-size:16px;color:var(--accent-bright);padding:1px var(--sp-1);white-space:nowrap;text-align:right}
+.stat-val{font-family:var(--font-mono);font-weight:600;font-size:16px;color:var(--accent-bright);padding:1px var(--sp-1);white-space:nowrap;text-align:left}
 .rat-th-rank{width:36px;text-align:center}
 .rat-th-player{width:230px}
 .rat-th-rat{width:60px}
@@ -880,6 +882,8 @@ function pollInjuries(){
       injuriesData=data;
       buildRankingsScreens();
       console.log('Injuries loaded:',data.count,'screens, total:',rankingsScreens.length);
+      // Re-fetch depth to pick up questionable/out markers (sets populated by injuries)
+      pollDepth();
     }
   }).catch(e=>console.warn('Injuries fetch error:',e));
 }
@@ -1574,13 +1578,13 @@ function renderRankings(r){
         <td class="sal-player">${p.name}${flagHtml}</td>
         <td class="hist-team">${teamFull(p.team)}</td>
         <td class="rat-stat">${p.gp}</td>
-        <td class="sal-salary">${p.valueDisplay}</td>
+        <td class="stat-val">${p.valueDisplay}</td>
         <td class="sal-bar-cell"><div class="sal-bar" style="width:${pct}%"></div></td>
       </tr>`;
     }).join('');
     p.innerHTML=`<div class="rankings-header"><div><div class="rankings-title">${r.title}</div><div class="rankings-source">${r.source}</div></div><div class="rankings-progress">${dots}</div></div>
       <div class="sal-table-wrap"><table class="sal-table">
-        <thead><tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-g">GP</th><th class="sal-th-salary">${statLabel}</th><th class="sal-th-bar"></th></tr></thead>
+        <thead><tr><th class="rat-th-rank">#</th><th class="rat-th-player">PLAYER</th><th class="hist-th-team">TEAM</th><th class="rat-th-g">GP</th><th class="stat-th">${statLabel}</th><th class="sal-th-bar"></th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>`;
   } else if(r.isTransaction){

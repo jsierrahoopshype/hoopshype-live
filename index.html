@@ -92,7 +92,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .scv-center-val{font-family:var(--font-mono);font-weight:600;font-size:17px;color:var(--accent-bright)}
 .scv-center-label{font-family:var(--font-display);font-weight:600;font-size:12.5px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text-tertiary)}
 .s1-flow-panel{grid-column:1/-1;background:var(--bg-surface);border-radius:var(--radius-md);padding:var(--sp-1) var(--sp-3) var(--sp-1);overflow:visible}
-.score-flow-svg{width:100%;display:block;height:65px}
+.score-flow-svg{width:100%;display:block;height:80px}
 .flow-legend{display:flex;gap:var(--sp-4);justify-content:center;margin-top:-2px}
 .flow-legend-item{display:flex;align-items:center;gap:var(--sp-1);font-family:var(--font-display);font-size:10.5px;font-weight:600;color:var(--text-secondary)}
 .flow-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
@@ -113,7 +113,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .leaders-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 var(--sp-3)}
 
 /* ─── SCREENS 2 & 3: BOXSCORE W/ SCOREBOARD ─── */
-.bs-scoreboard{display:flex;align-items:stretch;background:var(--bg-surface);border-radius:var(--radius-md);overflow:hidden;margin-bottom:var(--sp-3);flex-shrink:0}
+.bs-scoreboard{display:flex;align-items:stretch;background:var(--bg-surface);border-radius:var(--radius-md);overflow:hidden;margin-bottom:var(--sp-2);flex-shrink:0}
 .bs-team-side{flex:1;display:flex;align-items:center;padding:var(--sp-3) var(--sp-4);gap:var(--sp-3)}
 .bs-team-side.home{justify-content:flex-end;text-align:right}
 .bs-team-logo{width:52px;height:52px;background:var(--bg-panel);border:2px solid var(--border-medium);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-weight:800;font-size:20px;color:var(--text-secondary);flex-shrink:0}
@@ -143,7 +143,7 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .bs-table{width:100%;border-collapse:collapse;table-layout:fixed}
 .bs-table th{font-family:var(--font-display);font-weight:600;font-size:12.5px;letter-spacing:1px;text-transform:uppercase;color:var(--text-tertiary);text-align:center;padding:var(--sp-2);border-bottom:1px solid var(--border-medium);background:var(--bg-panel)}
 .bs-table th:first-child{text-align:left;width:200px}
-.bs-table td{font-family:var(--font-mono);font-size:15.5px;text-align:center;padding:4px var(--sp-2);color:var(--text-secondary);border-bottom:1px solid rgba(255,255,255,0.02)}
+.bs-table td{font-family:var(--font-mono);font-size:15.5px;text-align:center;padding:3px var(--sp-2);color:var(--text-secondary);border-bottom:1px solid rgba(255,255,255,0.02)}
 .bs-table tbody tr:nth-child(odd){background:var(--bg-row-odd)}
 .bs-table td:first-child{text-align:left;font-family:var(--font-body);font-weight:500;color:var(--text-primary);font-size:16px;white-space:nowrap}
 .bs-table td.highlight{color:var(--accent-bright);font-weight:700}
@@ -1102,7 +1102,7 @@ function renderScoreFlow(g){
   if(aCum.length<=1)return '';
   const maxS=Math.max(...aCum,...hCum,1);
   const n=aCum.length;
-  const W=480,H=60,padL=28,padR=32,padT=6,padB=14;
+  const W=480,H=72,padL=28,padR=32,padT=12,padB=14;
   const plotW=W-padL-padR,plotH=H-padT-padB;
   function x(i){return padL+i/(n-1)*plotW;}
   function y(v){return padT+plotH-v/maxS*plotH;}
@@ -2291,10 +2291,8 @@ function _updateNextGamesBar(){
 }
 
 function setMode(mode){
-  // Always update next games bar in rankings mode, even if mode unchanged
-  if(mode==='rankings'||currentMode==='rankings'){
-    _updateNextGamesBar();
-  }
+  // Always update next games bar
+  _updateNextGamesBar();
   if(mode===currentMode)return;
   const prev=currentMode;
   currentMode=mode;
@@ -2307,6 +2305,8 @@ function setMode(mode){
     rm.classList.remove('active');
     lb.style.display='flex';
     lb.querySelector('.live-dot')&&(lb.innerHTML='<div class="live-dot"></div>LIVE');
+    // Kick off game rotation
+    rotateGame();
     console.log('[MODE] → LIVE');
   } else if(mode==='transition'){
     // Both panels visible — we alternate programmatically
@@ -2316,6 +2316,8 @@ function setMode(mode){
     lb.innerHTML='<div class="live-dot"></div>LIVE';
     // Start transition alternation
     startTransitionCycle();
+    // Kick off game rotation
+    rotateGame();
     console.log('[MODE] → TRANSITION (50/50 live+rankings)');
   } else {
     // Pure rankings
@@ -2339,26 +2341,19 @@ function startTransitionCycle(){
 }
 
 // ═══ THREE-MODE AUTO-DETECTION ═══
-// LIVE: games are actively in progress
-// TRANSITION: games recently ended (was live this session, now final <3h)
-// RANKINGS: no live games, no recent session finals, or all scheduled
-let _sessionSawLive=false; // true if we saw a live game during this browser session
-let _lastLiveSeenAt=null;  // timestamp when last live game was active
+// LIVE: any game currently in progress
+// TRANSITION: games have ended (finals exist, no live) — shows boxscores + rankings mix
+// RANKINGS: all games scheduled (pre-tipoff) or no games — pure content rotation
 function determineAutoMode(games){
   if(!games||games.length===0)return'rankings';
-  // Any game currently live → LIVE
-  if(games.some(g=>g.status==='live')){
-    _sessionSawLive=true;
-    _lastLiveSeenAt=Date.now();
-    return'live';
-  }
-  // No live games — check if we SAW live games during this session
-  if(_sessionSawLive&&_lastLiveSeenAt){
-    const hoursSince=(Date.now()-_lastLiveSeenAt)/3600000;
-    if(hoursSince<3)return'live';        // Post-game recap
-    if(hoursSince<6)return'transition';   // Mix of recap + content
-    // Beyond 6h → fall through to rankings
-  }
+  const hasLive=games.some(g=>g.status==='live');
+  const hasFinal=games.some(g=>g.status==='final');
+  const allScheduled=games.every(g=>g.status==='scheduled');
+  // Any game currently live → LIVE mode (boxscores, mini-scores)
+  if(hasLive) return'live';
+  // Games have finished (finals on scoreboard) → TRANSITION (boxscores + rankings mix)
+  if(hasFinal) return'transition';
+  // All scheduled (pre-tipoff) → RANKINGS (previews, stats, depth charts, etc.)
   return'rankings';
 }
 
@@ -2417,15 +2412,15 @@ function pollScores(){
       // Determine mode FIRST — before attempting any rendering
       const mode=determineAutoMode(allGames);
       setMode(mode);
-      // Only render game screens if we're in live/transition mode (games have started)
+      // Only silently update current game data (rotation started by setMode)
       if(mode==='live'||mode==='transition'){
         const playable=allGames.filter(g=>g.status!=='scheduled');
-        if(playable.length>0){
-          const current=lastShownGameId?playable.find(g=>g.id===lastShownGameId):null;
-          const display=current||playable[0];
-          lastShownGameId=display.id;
-          renderGameScreens(display);
-          renderMiniScores(allGames,display.id);
+        if(playable.length>0 && lastShownGameId){
+          const current=playable.find(g=>g.id===lastShownGameId);
+          if(current){
+            renderGameScreens(current);
+            renderMiniScores(allGames,current.id);
+          }
         }
       }
       console.log('[API] Scores rendered:',data.count,'games, mode:',mode);
@@ -2508,7 +2503,6 @@ function init(){
   const h=window.location.hash.toLowerCase();
   if(hashMap[h]){setTimeout(()=>{setMode('rankings');setTimeout(()=>jumpSection(hashMap[h]),500);},1000);}
   window.addEventListener('hashchange',()=>{const h=window.location.hash.toLowerCase();if(hashMap[h]){setMode('rankings');setTimeout(()=>jumpSection(hashMap[h]),200);}});
-  scheduleNextScreen();
   setInterval(rotateNextGames,8000);
   setInterval(simulateScoreUpdate,5000);
   setInterval(()=>setMode(determineAutoMode(getGames())),30000);

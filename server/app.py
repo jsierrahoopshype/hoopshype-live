@@ -371,6 +371,7 @@ def fetch_headlines():
 
         # Parse timestamp from column A for 18-hour filter
         time_display = ""
+        has_valid_ts = False
         if len(row) > 0 and row[0].strip():
             ts_str = row[0].strip()
             parsed_ts = None
@@ -389,6 +390,16 @@ def fetch_headlines():
                     continue
                 diff_mins = (datetime.now(timezone.utc) - parsed_ts).total_seconds() / 60
                 time_display = ""  # timestamps removed from ticker display
+                has_valid_ts = True
+            else:
+                # Can't verify age — skip to be safe
+                skipped_old += 1
+                continue
+
+        if not has_valid_ts:
+            # No timestamp column — skip (can't verify within 18h)
+            skipped_old += 1
+            continue
 
         items.append({
             "text": text,
@@ -3834,16 +3845,27 @@ def fetch_game_previews():
         games = []
 
     # Use ALL today's games for previews (scheduled, live, or final)
-    # Only fall back to upcoming when there are literally no games today
+    # Also include upcoming games when all today's are final
     preview_games = [g for g in games if g.get("away", {}).get("abbr")]
     upcoming_label = ""
 
-    if not preview_games:
-        # No games today at all — get next day's games
-        log.info("Game previews: no games today, looking for upcoming...")
+    # Check if all today's games are final — if so, also fetch upcoming
+    all_final = preview_games and all(
+        g.get("status") == "final" for g in preview_games
+    )
+
+    if not preview_games or all_final:
+        # No games today or all finished — get next day's games too
+        if not preview_games:
+            log.info("Game previews: no games today, looking for upcoming...")
+        else:
+            log.info("Game previews: all today's games final, also fetching upcoming...")
         upcoming = _get_upcoming_games()
         if upcoming:
-            preview_games = upcoming
+            if not preview_games:
+                preview_games = upcoming
+            else:
+                preview_games = preview_games + upcoming
             upcoming_label = upcoming[0].get("label", "")
             log.info(f"Game previews: found {len(upcoming)} upcoming games ({upcoming_label})")
         else:

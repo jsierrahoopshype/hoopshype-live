@@ -213,7 +213,6 @@ BLUESKY_ACCOUNTS = [
     "salmanalinba.bsky.social",
     "pilarcasadobiesa.bsky.social",
     "bannedmacmahon.bsky.social",
-    "theoquintard.bsky.social",
     "prohoopswriters.bsky.social",
     "jmcdonaldsa.bsky.social",
     "markjonesespn.bsky.social",

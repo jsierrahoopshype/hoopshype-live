@@ -435,6 +435,29 @@ _NBA_HEADERS = {
     "Accept": "application/json",
 }
 
+# ─── NBA API Proxy (Cloudflare Worker) ───
+# Set this to your Cloudflare Worker URL to bypass datacenter IP blocks.
+# When empty/None, requests go directly to NBA endpoints.
+NBA_PROXY_BASE = os.environ.get("NBA_PROXY_BASE", "").rstrip("/")
+
+
+def _nba_get(url, timeout=10, params=None, headers=None, **kwargs):
+    """Fetch from an NBA endpoint, routing through CF Worker proxy if configured."""
+    if NBA_PROXY_BASE and ("nba.com" in url or "espn.com" in url):
+        # Build the full URL with params for the proxy
+        if params:
+            from urllib.parse import urlencode
+            full_url = f"{url}?{urlencode(params)}"
+        else:
+            full_url = url
+        proxy_url = f"{NBA_PROXY_BASE}/?url={requests.utils.quote(full_url, safe='')}"
+        log.debug(f"NBA proxy: {full_url[:80]}...")
+        resp = requests.get(proxy_url, timeout=timeout, **kwargs)
+    else:
+        hdrs = headers or _NBA_HEADERS
+        resp = requests.get(url, headers=hdrs, params=params, timeout=timeout, **kwargs)
+    return resp
+
 
 def _parse_game_clock(iso_duration):
     """Convert ISO 8601 duration (PT04M32.00S) → '4:32'. Returns '' if empty/invalid."""
@@ -501,7 +524,7 @@ def _fetch_boxscore(game_id):
     """Fetch detailed boxscore for a single game from nba.com CDN."""
     url = config.SCORES_BOXSCORE_URL.format(game_id=game_id)
     try:
-        resp = requests.get(url, headers=_NBA_HEADERS, timeout=10)
+        resp = _nba_get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
 
@@ -860,7 +883,7 @@ def fetch_scores():
     log.info("Fetching NBA scores from cdn.nba.com...")
 
     try:
-        resp = requests.get(config.SCORES_SCOREBOARD_URL, headers=_NBA_HEADERS, timeout=10)
+        resp = _nba_get(config.SCORES_SCOREBOARD_URL, timeout=10)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -1986,7 +2009,7 @@ def _fetch_nba_leaders(season, per_mode):
         "LeagueID": "00",
         "ActiveFlag": "",
     }
-    resp = requests.get(url, params=params, headers=_NBA_STATS_HEADERS, timeout=60)
+    resp = _nba_get(url, params=params, headers=_NBA_STATS_HEADERS, timeout=60)
     resp.raise_for_status()
     data = resp.json()
     rs = data.get("resultSet", {})
@@ -2094,7 +2117,7 @@ def fetch_counting_stats():
                 "LeagueID": "00",
                 "ActiveFlag": "",
             }
-            all_resp = requests.get(all_url, params=all_params, headers=_NBA_STATS_HEADERS, timeout=60)
+            all_resp = _nba_get(all_url, params=all_params, headers=_NBA_STATS_HEADERS, timeout=60)
             all_resp.raise_for_status()
             all_data = all_resp.json()
             all_rs = all_data.get("resultSet", {})
@@ -2805,13 +2828,16 @@ def _get_upcoming_games():
     try:
         url = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
         log.info(f"Fetching upcoming games from {url}")
-        resp = requests.get(url, headers=_NBA_HEADERS, timeout=15)
+        resp = _nba_get(url, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         _schedule_cache["data"] = data  # Cache for season series / rest days
         # Skip dates up to and including the scoreboard date (those games are already loaded)
-        # Use scoreboard date if available, otherwise fall back to today ET
-        skip_date = _scoreboard_date or _now_et().strftime("%Y-%m-%d")
+        # When scoreboard date unknown, use yesterday as safe fallback (don't skip today)
+        if _scoreboard_date:
+            skip_date = _scoreboard_date
+        else:
+            skip_date = (_now_et() - timedelta(days=1)).strftime("%Y-%m-%d")
         today_str = _now_et().strftime("%Y-%m-%d")
         log.info(f"  Schedule JSON loaded, looking for dates after {skip_date} (scoreboard) / today={today_str} (ET)")
         dates = data.get("leagueSchedule", {}).get("gameDates", [])
@@ -3110,7 +3136,7 @@ def fetch_standings():
         # Try with longer timeout and retry
         for attempt in range(2):
             try:
-                resp = requests.get(url, params=params, headers=_NBA_STATS_HEADERS, timeout=45)
+                resp = _nba_get(url, params=params, headers=_NBA_STATS_HEADERS, timeout=45)
                 resp.raise_for_status()
                 data = resp.json()
                 break
@@ -3129,7 +3155,7 @@ def fetch_standings():
         for cdn_url in cdn_urls:
             try:
                 log.info(f"Trying standings fallback: {cdn_url}")
-                resp2 = requests.get(cdn_url, headers=_NBA_STATS_HEADERS, timeout=15)
+                resp2 = _nba_get(cdn_url, headers=_NBA_STATS_HEADERS, timeout=15)
                 resp2.raise_for_status()
                 cdn = resp2.json()
                 standings_list = cdn.get("standings", cdn.get("league", {}).get("standard", {}).get("teams", []))
@@ -3189,7 +3215,7 @@ def fetch_standings():
         try:
             log.info("Trying ESPN standings fallback...")
             espn_url = "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
-            resp3 = requests.get(espn_url, timeout=15)
+            resp3 = _nba_get(espn_url, timeout=15)
             resp3.raise_for_status()
             espn = resp3.json()
             _team_standings.clear()
@@ -3544,7 +3570,7 @@ def _fetch_team_advanced_stats():
             "ShotClockRange": "", "StarterBench": "", "TeamID": "0",
             "TwoWay": "0", "VsConference": "", "VsDivision": "",
         }
-        resp = requests.get(url, params=params, headers=_NBA_STATS_HEADERS, timeout=30)
+        resp = _nba_get(url, params=params, headers=_NBA_STATS_HEADERS, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         rs = data.get("resultSets", [{}])[0]
@@ -3611,7 +3637,7 @@ def _fetch_team_clutch_stats():
             "ShotClockRange": "", "StarterBench": "", "TeamID": "0",
             "TwoWay": "0", "VsConference": "", "VsDivision": "",
         }
-        resp = requests.get(url, params=params, headers=_NBA_STATS_HEADERS, timeout=30)
+        resp = _nba_get(url, params=params, headers=_NBA_STATS_HEADERS, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         rs = data.get("resultSets", [{}])[0]
@@ -3685,7 +3711,7 @@ def _fetch_espn_predictions(game_date_str):
         date_compact = game_date_str.replace("-", "")  # "20260220"
         url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_compact}"
         log.info(f"Fetching ESPN predictions for {game_date_str}...")
-        resp = requests.get(url, timeout=15)
+        resp = _nba_get(url, timeout=15)
         resp.raise_for_status()
         data = resp.json()
         predictions = {}
@@ -4968,7 +4994,7 @@ def api_salaries():
 def api_debug_boxscore():
     """Debug endpoint: return raw boxscore structure for the first live/final game."""
     try:
-        resp = requests.get(config.SCORES_SCOREBOARD_URL, headers=_NBA_HEADERS, timeout=10)
+        resp = _nba_get(config.SCORES_SCOREBOARD_URL, timeout=10)
         resp.raise_for_status()
         sb = resp.json().get("scoreboard", {})
         games_raw = sb.get("games", [])
@@ -4983,9 +5009,9 @@ def api_debug_boxscore():
             return jsonify({"error": "No live/final games", "games": len(games_raw)})
 
         gid = target["gameId"]
-        box_resp = requests.get(
+        box_resp = _nba_get(
             config.SCORES_BOXSCORE_URL.format(game_id=gid),
-            headers=_NBA_HEADERS, timeout=10,
+            timeout=10,
         )
         box_resp.raise_for_status()
         raw = box_resp.json()
@@ -5171,6 +5197,10 @@ if __name__ == "__main__":
     log.info(f"Headlines source: Google Sheet {config.HEADLINES_SHEET_ID} (col {config.HEADLINES_COLUMN})")
     log.info(f"Scores source: {config.SCORES_SCOREBOARD_URL}")
     log.info(f"Server: http://localhost:{config.SERVER_PORT}")
+    if NBA_PROXY_BASE:
+        log.info(f"NBA API proxy: {NBA_PROXY_BASE}")
+    else:
+        log.info("NBA API proxy: OFF (direct requests)")
     log.info("=" * 50)
 
     # Pre-warm caches in background thread (only in actual server process, not reloader)

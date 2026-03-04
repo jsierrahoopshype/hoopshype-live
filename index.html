@@ -401,7 +401,10 @@ html,body{width:var(--canvas-w);height:var(--canvas-h);overflow:hidden;backgroun
 .sidebar-title{font-family:var(--font-display);font-weight:700;font-size:15px;letter-spacing:1px;text-transform:uppercase;color:var(--text-primary);display:flex;align-items:center;gap:var(--sp-2)}
 .bsky-logo{width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center}
 .bsky-logo svg{width:18px;height:18px}
-.feed-container{flex:1;overflow:hidden;display:flex;flex-direction:column;gap:var(--sp-3);mask-image:linear-gradient(to bottom,black 0%,black 90%,transparent 100%);-webkit-mask-image:linear-gradient(to bottom,black 0%,black 90%,transparent 100%)}
+.feed-container{flex:1;overflow:hidden;display:flex;flex-direction:column;gap:var(--sp-3);mask-image:linear-gradient(to bottom,black 0%,black 90%,transparent 100%);-webkit-mask-image:linear-gradient(to bottom,black 0%,black 90%,transparent 100%);position:relative}
+.feed-scroll-wrap{display:flex;flex-direction:column;gap:var(--sp-3);animation:feedScroll var(--feed-scroll-duration,120s) linear infinite}
+.feed-scroll-wrap:hover{animation-play-state:paused}
+@keyframes feedScroll{0%{transform:translateY(0)}100%{transform:translateY(var(--feed-scroll-distance,-50%))}}
 .feed-post{background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:var(--sp-3) var(--sp-4);animation:postSlideIn 0.4s ease-out;flex-shrink:0}
 @keyframes postSlideIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}
 .post-header{display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-2)}
@@ -1533,7 +1536,7 @@ function renderTicker(headlines){
 
 function renderFeed(posts){
   const fc=document.getElementById('feedContainer');
-  fc.innerHTML=posts.map((p,i)=>{
+  const postHtml=posts.map((p,i)=>{
     const fb=`<div class="post-avatar">${p.avatar}</div>`;
     const av=p.avatarUrl
       ?`<img class="post-avatar-img" src="${p.avatarUrl}" alt="" width="28" height="28" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`
@@ -1548,6 +1551,19 @@ function renderFeed(posts){
     }
     return `<div class="feed-post" style="animation-delay:${i*0.05}s"><div class="post-header"><div class="post-avatar-wrap" data-fb="${fb.replace(/"/g,'&quot;')}">${av}</div><div class="post-meta"><div class="post-author">${p.author}</div><div class="post-handle">${p.handle}</div></div><div class="post-time">${p.time}</div></div><div class="post-text">${txt}</div>${extras}</div>`;
   }).join('');
+  // Duplicate posts for seamless scroll loop
+  fc.innerHTML=`<div class="feed-scroll-wrap">${postHtml}${postHtml}</div>`;
+  // Calculate scroll distance and duration based on content height
+  requestAnimationFrame(()=>{
+    const wrap=fc.querySelector('.feed-scroll-wrap');
+    if(wrap){
+      const halfH=wrap.scrollHeight/2;
+      const speed=30; // pixels per second
+      const duration=halfH/speed;
+      wrap.style.setProperty('--feed-scroll-distance',`-${halfH}px`);
+      wrap.style.setProperty('--feed-scroll-duration',`${duration}s`);
+    }
+  });
 }
 
 let currentRankingIndex=0;
@@ -2381,7 +2397,7 @@ function pollBluesky(){
     console.log('[API] Bluesky response:',data.count,'posts, first:',data.posts[0]?.author||'(none)');
     if(data.posts&&data.posts.length>0){
       liveFeed=data.posts;
-      renderFeed(liveFeed);
+      renderFeed(liveFeed.slice(0,50));
       console.log('[API] Bluesky feed rendered with',liveFeed.length,'real posts');
     }else{
       console.log('[API] Bluesky returned empty — keeping current feed');

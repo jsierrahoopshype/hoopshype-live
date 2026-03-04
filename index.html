@@ -2305,8 +2305,8 @@ function setMode(mode){
     rm.classList.remove('active');
     lb.style.display='flex';
     lb.querySelector('.live-dot')&&(lb.innerHTML='<div class="live-dot"></div>LIVE');
-    // Kick off game rotation
-    rotateGame();
+    // Only kick off rotation when entering from rankings (not switching live↔transition)
+    if(prev==='rankings'||prev===null) rotateGame();
     console.log('[MODE] → LIVE');
   } else if(mode==='transition'){
     // Both panels visible — we alternate programmatically
@@ -2316,8 +2316,8 @@ function setMode(mode){
     lb.innerHTML='<div class="live-dot"></div>LIVE';
     // Start transition alternation
     startTransitionCycle();
-    // Kick off game rotation
-    rotateGame();
+    // Only kick off rotation when entering from rankings (not switching live↔transition)
+    if(prev==='rankings'||prev===null) rotateGame();
     console.log('[MODE] → TRANSITION (50/50 live+rankings)');
   } else {
     // Pure rankings
@@ -2341,19 +2341,27 @@ function startTransitionCycle(){
 }
 
 // ═══ THREE-MODE AUTO-DETECTION ═══
-// LIVE: any game currently in progress
-// TRANSITION: games have ended (finals exist, no live) — shows boxscores + rankings mix
-// RANKINGS: all games scheduled (pre-tipoff) or no games — pure content rotation
+// LIVE: any game live, OR all final within 8h of last game ending
+// TRANSITION: all final, 8-12h after last game ended (boxscores + rankings mix)
+// RANKINGS: 12h+ after last game ended, or all scheduled (pre-tipoff)
+let _hoursSinceLastGame=null; // updated from API response
 function determineAutoMode(games){
   if(!games||games.length===0)return'rankings';
   const hasLive=games.some(g=>g.status==='live');
   const hasFinal=games.some(g=>g.status==='final');
   const allScheduled=games.every(g=>g.status==='scheduled');
-  // Any game currently live → LIVE mode (boxscores, mini-scores)
+  // Any game currently live → LIVE mode
   if(hasLive) return'live';
-  // Games have finished (finals on scoreboard) → TRANSITION (boxscores + rankings mix)
-  if(hasFinal) return'transition';
-  // All scheduled (pre-tipoff) → RANKINGS (previews, stats, depth charts, etc.)
+  // All scheduled (pre-tipoff) → RANKINGS
+  if(allScheduled) return'rankings';
+  // Games have finished — use hours since last game ended
+  if(hasFinal && _hoursSinceLastGame!==null){
+    if(_hoursSinceLastGame<8) return'live';          // Post-game recap (boxscores)
+    if(_hoursSinceLastGame<12) return'transition';    // Mix of boxscores + rankings
+    return'rankings';                                  // Pure content rotation
+  }
+  // Fallback: finals exist but no timing info → show as live
+  if(hasFinal) return'live';
   return'rankings';
 }
 
@@ -2404,7 +2412,10 @@ function pollScores(){
     if(!r.ok) throw new Error('HTTP '+r.status);
     return r.json();
   }).then(data=>{
-    console.log('[API] Scores response:',data.count,'games, hasLive:',data.hasLive);
+    console.log('[API] Scores response:',data.count,'games, hasLive:',data.hasLive,'hoursSince:',data.hoursSinceLastGame);
+    if(data.hoursSinceLastGame!==undefined&&data.hoursSinceLastGame!==null){
+      _hoursSinceLastGame=data.hoursSinceLastGame;
+    }
     if(data.games&&data.games.length>0){
       liveGames=data.games;
       buildRankingsScreens();
@@ -2511,6 +2522,14 @@ function init(){
     if(currentMode==='rankings'&&rankingsScreens.length>0&&!rankingsRotationTimer){
       console.warn('[WATCHDOG] Rankings rotation stalled — restarting');
       _ensureRotation();
+    }
+    // Also watch live/transition: if no screen timer running, restart game rotation
+    if((currentMode==='live'||currentMode==='transition')&&!screenTimer&&transitionPhase!=='rankings'&&liveGames&&liveGames.length>0){
+      const playable=liveGames.filter(g=>g.status==='live'||g.status==='final');
+      if(playable.length>0){
+        console.warn('[WATCHDOG] Live/transition rotation stalled — restarting');
+        rotateGame();
+      }
     }
   },15000);
   initKeyboard();

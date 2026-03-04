@@ -48,6 +48,8 @@ salaries_cache = TTLCache(maxsize=1, ttl=1800)  # 30 min TTL
 last_good_bluesky = []
 last_good_headlines = []
 last_good_scores = []
+_scoreboard_date = ""  # Date the scoreboard is showing (may lag behind ET date)
+_latest_game_start_utc = None  # Latest game start time (UTC) for hours-since-final calc
 last_good_salaries = {"rankings": [], "teams": {}, "count": 0}
 
 # Cross-reference lookups (populated by fetch_salaries / fetch_depth)
@@ -867,6 +869,41 @@ def fetch_scores():
 
     sb = data.get("scoreboard", {})
     games_raw = sb.get("games", [])
+
+    # Track what date the scoreboard is showing (may be yesterday until NBA resets ~noon ET)
+    global _scoreboard_date
+    sb_date = sb.get("gameDate", "")
+    if not sb_date and games_raw:
+        # Fallback: extract from first game's gameId (format: 00225XXXXX) or gameTimeUTC
+        gt = games_raw[0].get("gameTimeUTC", "") or games_raw[0].get("gameDateTimeUTC", "")
+        if gt and len(gt) >= 10:
+            try:
+                from datetime import datetime as dt2
+                utc = dt2.fromisoformat(gt.replace("Z", "+00:00"))
+                try:
+                    from zoneinfo import ZoneInfo
+                    et = utc.astimezone(ZoneInfo("America/New_York"))
+                except Exception:
+                    from datetime import timedelta
+                    et = utc - timedelta(hours=5)
+                sb_date = et.strftime("%Y-%m-%d")
+            except Exception:
+                pass
+    if sb_date:
+        _scoreboard_date = sb_date
+
+    # Track latest game start time for hours-since-final calculation
+    global _latest_game_start_utc
+    for g in games_raw:
+        gt = g.get("gameTimeUTC", "") or g.get("gameDateTimeUTC", "")
+        if gt:
+            try:
+                from datetime import datetime as dt2
+                utc = dt2.fromisoformat(gt.replace("Z", "+00:00"))
+                if _latest_game_start_utc is None or utc > _latest_game_start_utc:
+                    _latest_game_start_utc = utc
+            except Exception:
+                pass
 
     if not games_raw:
         log.info("No NBA games today")
@@ -2772,8 +2809,11 @@ def _get_upcoming_games():
         resp.raise_for_status()
         data = resp.json()
         _schedule_cache["data"] = data  # Cache for season series / rest days
+        # Skip dates up to and including the scoreboard date (those games are already loaded)
+        # Use scoreboard date if available, otherwise fall back to today ET
+        skip_date = _scoreboard_date or _now_et().strftime("%Y-%m-%d")
         today_str = _now_et().strftime("%Y-%m-%d")
-        log.info(f"  Schedule JSON loaded, looking for dates after {today_str} (ET)")
+        log.info(f"  Schedule JSON loaded, looking for dates after {skip_date} (scoreboard) / today={today_str} (ET)")
         dates = data.get("leagueSchedule", {}).get("gameDates", [])
         log.info(f"  Found {len(dates)} game dates in schedule")
         if not dates:
@@ -2811,7 +2851,7 @@ def _get_upcoming_games():
                 # Last resort: just try to extract any 10-char date
                 game_date = raw_date[:10]
 
-            if not game_date or game_date <= today_str:
+            if not game_date or game_date <= skip_date:
                 continue
             games = []
             for g in gd.get("games", []):
@@ -2858,7 +2898,7 @@ def _get_upcoming_games():
             if games:
                 log.info(f"  Found {len(games)} upcoming games on {game_date}")
                 return games
-        log.warning(f"  No future game dates found after {today_str} (checked {len(dates)} dates)")
+        log.warning(f"  No future game dates found after {skip_date} (checked {len(dates)} dates)")
     except Exception as e:
         log.warning(f"Upcoming games fetch failed: {e}")
         import traceback
@@ -3855,17 +3895,15 @@ def fetch_game_previews():
     )
 
     if not preview_games or all_final:
-        # No games today or all finished — get next day's games too
+        # No games today or all finished — get next day's games
         if not preview_games:
             log.info("Game previews: no games today, looking for upcoming...")
         else:
             log.info("Game previews: all today's games final, also fetching upcoming...")
         upcoming = _get_upcoming_games()
         if upcoming:
-            if not preview_games:
-                preview_games = upcoming
-            else:
-                preview_games = preview_games + upcoming
+            # When all final, REPLACE with upcoming (don't show last night's finals as previews)
+            preview_games = upcoming
             upcoming_label = upcoming[0].get("label", "")
             log.info(f"Game previews: found {len(upcoming)} upcoming games ({upcoming_label})")
         else:
@@ -4895,10 +4933,25 @@ def api_scores():
     """Return today's NBA game scores with full boxscore data."""
     games = fetch_scores()
     has_live = any(g["status"] == "live" for g in games)
+    has_final = any(g["status"] == "final" for g in games)
+
+    # Estimate hours since last game ended (for frontend mode detection)
+    hours_since = None
+    if has_final and not has_live and _latest_game_start_utc:
+        try:
+            est_end = _latest_game_start_utc + timedelta(hours=2, minutes=30)
+            now_utc = datetime.now(timezone.utc)
+            hours_since = round((now_utc - est_end).total_seconds() / 3600, 1)
+            if hours_since < 0:
+                hours_since = 0
+        except Exception:
+            pass
+
     return jsonify({
         "games": games,
         "count": len(games),
         "hasLive": has_live,
+        "hoursSinceLastGame": hours_since,
     })
 
 

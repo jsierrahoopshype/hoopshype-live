@@ -3383,10 +3383,10 @@ _ABBR_TO_TEAM_ID = {v: k for k, v in _TEAM_ID_TO_ABBR.items()}
 
 
 def _team_logo_url(abbr):
-    """Return NBA CDN logo URL for a team abbreviation."""
+    """Return logo URL for a team abbreviation. Uses local proxy to bypass CDN blocks."""
     tid = _ABBR_TO_TEAM_ID.get(abbr, 0)
     if tid:
-        return f"https://cdn.nba.com/logos/nba/{tid}/primary/L/logo.svg"
+        return f"/api/nba-logo/{tid}"
     return ""
 
 
@@ -4938,6 +4938,28 @@ def serve_embed():
 def serve_logo():
     """Serve the HoopsHype logo image."""
     return send_from_directory(PROJECT_ROOT, "hoopshype-logo.png")
+
+
+# ─── NBA Logo Proxy (caches logos locally to avoid CDN blocks) ───
+_logo_cache = {}  # team_id → (content_bytes, content_type)
+
+@app.route("/api/nba-logo/<int:team_id>")
+def api_nba_logo(team_id):
+    """Serve NBA team logo, cached locally. Bypasses CDN IP blocks."""
+    from flask import Response
+    if team_id in _logo_cache:
+        body, ct = _logo_cache[team_id]
+        return Response(body, content_type=ct, headers={"Cache-Control": "public, max-age=86400"})
+    url = f"https://cdn.nba.com/logos/nba/{team_id}/primary/L/logo.svg"
+    try:
+        resp = _nba_get(url, timeout=10)
+        resp.raise_for_status()
+        ct = resp.headers.get("Content-Type", "image/svg+xml")
+        _logo_cache[team_id] = (resp.content, ct)
+        return Response(resp.content, content_type=ct, headers={"Cache-Control": "public, max-age=86400"})
+    except Exception as e:
+        log.debug(f"Logo fetch failed for team {team_id}: {e}")
+        return Response("", status=404)
 
 
 @app.route("/api/bluesky")

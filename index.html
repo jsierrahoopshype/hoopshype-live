@@ -1158,7 +1158,7 @@ function renderScreen1(g){
     </div>
     <div class="s1-scoreboard">
       <div class="s1-team-side">
-        <div class="s1-team-logo" data-fb="${g.away.abbr}">${g.away.teamId?`<img src="https://cdn.nba.com/logos/nba/${g.away.teamId}/primary/L/logo.svg" alt="${g.away.abbr}" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`:g.away.abbr}</div>
+        <div class="s1-team-logo" data-fb="${g.away.abbr}">${g.away.teamId?`<img src="/api/nba-logo/${g.away.teamId}" alt="${g.away.abbr}" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`:g.away.abbr}</div>
         <div class="s1-team-info"><div class="s1-team-city">${g.away.city}</div><div class="s1-team-name">${g.away.name}</div><div class="s1-team-record">${g.away.record}</div></div>
       </div>
       <div class="s1-score-center">
@@ -1171,7 +1171,7 @@ function renderScreen1(g){
       </div>
       <div class="s1-team-side home">
         <div class="s1-team-info" style="align-items:flex-end"><div class="s1-team-city">${g.home.city}</div><div class="s1-team-name">${g.home.name}</div><div class="s1-team-record">${g.home.record}</div></div>
-        <div class="s1-team-logo" data-fb="${g.home.abbr}">${g.home.teamId?`<img src="https://cdn.nba.com/logos/nba/${g.home.teamId}/primary/L/logo.svg" alt="${g.home.abbr}" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`:g.home.abbr}</div>
+        <div class="s1-team-logo" data-fb="${g.home.abbr}">${g.home.teamId?`<img src="/api/nba-logo/${g.home.teamId}" alt="${g.home.abbr}" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`:g.home.abbr}</div>
       </div>
     </div>
     <div class="s1-bottom">
@@ -1232,7 +1232,7 @@ function renderBoxscore(g,side){
   const totals={pts:allPlayers.reduce((s,p)=>s+p.pts,0),reb:allPlayers.reduce((s,p)=>s+p.reb,0),ast:allPlayers.reduce((s,p)=>s+p.ast,0),stl:allPlayers.reduce((s,p)=>s+p.stl,0),blk:allPlayers.reduce((s,p)=>s+p.blk,0),to:allPlayers.reduce((s,p)=>s+p.to,0)};
   function sumShooting(players,key){let m=0,a=0;players.forEach(p=>{const[mm,aa]=p[key].split('-').map(Number);m+=mm;a+=aa;});return{made:m,att:a,str:`${m}-${a}`,pct:a>0?(m/a*100).toFixed(1)+'%':'—'};}
   const fgT=sumShooting(allPlayers,'fg'),threeT=sumShooting(allPlayers,'three'),ftT=sumShooting(allPlayers,'ft');
-  function bsLogo(t){return`<div class="bs-team-logo" data-fb="${t.abbr}">${t.teamId?`<img src="https://cdn.nba.com/logos/nba/${t.teamId}/primary/L/logo.svg" alt="${t.abbr}" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`:t.abbr}</div>`;}
+  function bsLogo(t){return`<div class="bs-team-logo" data-fb="${t.abbr}">${t.teamId?`<img src="/api/nba-logo/${t.teamId}" alt="${t.abbr}" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`:t.abbr}</div>`;}
   return `
     <div class="bs-scoreboard">
       <div class="bs-team-side">${bsLogo(g.away)}<div><div class="bs-team-name">${g.away.name}</div><div class="bs-team-record">${g.away.record}</div></div></div>
@@ -1507,7 +1507,7 @@ function renderMiniScores(games,activeId){
       });
       leadersHtml=`<div class="mini-leaders">${ldrs.join('')}</div>`;
     }
-    return `<div class="mini-game ${g.id===activeId?'active':''}" data-gid="${g.id}"><div class="mini-period ${g.status==='final'?'final':''}">${g.status==='final'?'FINAL':(g.status==='scheduled'?g.clock||'—':(g.period?g.period+' '+g.clock:g.clock))}</div><div class="mini-teams"><div class="mini-team-row">${g.away.teamId?`<img class="mini-team-logo" src="https://cdn.nba.com/logos/nba/${g.away.teamId}/primary/L/logo.svg" onerror="this.style.display='none'">`:''}<span class="mini-team-abbr">${g.away.abbr}</span><span class="mini-score ${g.away.score>g.home.score?'leading':''}">${g.away.score}</span></div><div class="mini-team-row">${g.home.teamId?`<img class="mini-team-logo" src="https://cdn.nba.com/logos/nba/${g.home.teamId}/primary/L/logo.svg" onerror="this.style.display='none'">`:''}<span class="mini-team-abbr">${g.home.abbr}</span><span class="mini-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div></div>${leadersHtml}</div>`;
+    return `<div class="mini-game ${g.id===activeId?'active':''}" data-gid="${g.id}"><div class="mini-period ${g.status==='final'?'final':''}">${g.status==='final'?'FINAL':(g.status==='scheduled'?g.clock||'—':(g.period?g.period+' '+g.clock:g.clock))}</div><div class="mini-teams"><div class="mini-team-row">${g.away.teamId?`<img class="mini-team-logo" src="/api/nba-logo/${g.away.teamId}" onerror="this.style.display='none'">`:''}<span class="mini-team-abbr">${g.away.abbr}</span><span class="mini-score ${g.away.score>g.home.score?'leading':''}">${g.away.score}</span></div><div class="mini-team-row">${g.home.teamId?`<img class="mini-team-logo" src="/api/nba-logo/${g.home.teamId}" onerror="this.style.display='none'">`:''}<span class="mini-team-abbr">${g.home.abbr}</span><span class="mini-score ${g.home.score>g.away.score?'leading':''}">${g.home.score}</span></div></div>${leadersHtml}</div>`;
   }).join('');
   // Scroll track so active game is centered
   requestAnimationFrame(()=>{
@@ -2065,7 +2065,7 @@ function renderRankings(r){
     function injCol(items){
       if(!items||items.length===0)return '';
       const rows=items.map(p=>{
-        if(p.isHeader){let _tid=NBA_TEAM_IDS[p.team];if(!_tid){const _tl=p.team.toLowerCase();for(const[k,v]of Object.entries(NBA_TEAM_IDS)){if(k.toLowerCase().startsWith(_tl)||k.toLowerCase().includes(_tl)){_tid=v;break;}}}return `<tr class="inj-team-header"><td colspan="4">${p.team}${_tid?` <img class="inj-team-logo" src="https://cdn.nba.com/logos/nba/${_tid}/primary/L/logo.svg" alt="" onerror="this.style.display='none'">`:``}</td></tr>`;}
+        if(p.isHeader){let _tid=NBA_TEAM_IDS[p.team];if(!_tid){const _tl=p.team.toLowerCase();for(const[k,v]of Object.entries(NBA_TEAM_IDS)){if(k.toLowerCase().startsWith(_tl)||k.toLowerCase().includes(_tl)){_tid=v;break;}}}return `<tr class="inj-team-header"><td colspan="4">${p.team}${_tid?` <img class="inj-team-logo" src="/api/nba-logo/${_tid}" alt="" onerror="this.style.display='none'">`:``}</td></tr>`;}
         const flagHtml=p.country?` <img class="sal-flag" src="https://flagcdn.com/w20/${p.country}.png" alt="" width="20" height="15">`:'';
         const st=p.status||'';
         const stLower=st.toLowerCase();
